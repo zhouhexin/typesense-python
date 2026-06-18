@@ -56,6 +56,128 @@ class Coordinator:
             "warnings": warnings,
         }
 
+    async def list_collections(self) -> dict[str, list[str]]:
+        collections: set[str] = set()
+        for node in self.cluster.nodes.values():
+            try:
+                response = await self._client.get(f"{node.url}/internal/collections")
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+            collections.update(response.json().get("collections", []))
+        return {"collections": sorted(collections)}
+
+    async def list_documents(self, collection: str) -> dict[str, list[Document]]:
+        documents: list[Document] = []
+        for shard_id in range(self.cluster.shard_count):
+            response = await self._client.get(
+                self._documents_url(self.cluster.get_primary(shard_id), shard_id, collection)
+            )
+            response.raise_for_status()
+            documents.extend(response.json().get("documents", []))
+        documents.sort(key=lambda document: str(document["id"]))
+        return {"documents": documents}
+
+    async def get_document(self, collection: str, document_id: str) -> Document:
+        shard_id = self.cluster.get_shard_id(document_id)
+        response = await self._client.get(
+            self._single_document_url(
+                self.cluster.get_primary(shard_id),
+                shard_id,
+                collection,
+                document_id,
+            )
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def update_document(
+        self,
+        collection: str,
+        document_id: str,
+        changes: Document,
+    ) -> dict[str, Any]:
+        shard_id = self.cluster.get_shard_id(document_id)
+        primary = self.cluster.get_primary(shard_id)
+        replicas = self.cluster.get_replicas(shard_id)
+
+        response = await self._client.patch(
+            self._single_document_url(primary, shard_id, collection, document_id),
+            json=changes,
+        )
+        response.raise_for_status()
+
+        replica_results: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for replica in replicas:
+            try:
+                replica_response = await self._client.patch(
+                    self._single_document_url(
+                        replica,
+                        shard_id,
+                        collection,
+                        document_id,
+                    ),
+                    json=changes,
+                )
+                replica_response.raise_for_status()
+                replica_results.append({"node": replica.id, "ok": True})
+            except httpx.HTTPError as error:
+                replica_results.append({"node": replica.id, "ok": False})
+                warnings.append(f"replica {replica.id} update failed: {error}")
+
+        return {
+            "ok": True,
+            "id": document_id,
+            "document": response.json(),
+            "shard_id": shard_id,
+            "primary": primary.id,
+            "replicas": replica_results,
+            "warnings": warnings,
+        }
+
+    async def delete_document(
+        self,
+        collection: str,
+        document_id: str,
+    ) -> dict[str, Any]:
+        shard_id = self.cluster.get_shard_id(document_id)
+        primary = self.cluster.get_primary(shard_id)
+        replicas = self.cluster.get_replicas(shard_id)
+
+        response = await self._client.delete(
+            self._single_document_url(primary, shard_id, collection, document_id)
+        )
+        response.raise_for_status()
+
+        replica_results: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for replica in replicas:
+            try:
+                replica_response = await self._client.delete(
+                    self._single_document_url(
+                        replica,
+                        shard_id,
+                        collection,
+                        document_id,
+                    )
+                )
+                replica_response.raise_for_status()
+                replica_results.append({"node": replica.id, "ok": True})
+            except httpx.HTTPError as error:
+                replica_results.append({"node": replica.id, "ok": False})
+                warnings.append(f"replica {replica.id} delete failed: {error}")
+
+        return {
+            "ok": True,
+            "id": document_id,
+            "document": response.json(),
+            "shard_id": shard_id,
+            "primary": primary.id,
+            "replicas": replica_results,
+            "warnings": warnings,
+        }
+
     async def search(
         self,
         collection: str,
@@ -122,9 +244,27 @@ class Coordinator:
         )
 
     @staticmethod
+    def _documents_url(node: NodeInfo, shard_id: int, collection: str) -> str:
+        return (
+            f"{node.url}/internal/shards/{shard_id}"
+            f"/collections/{collection}/documents"
+        )
+
+    @staticmethod
+    def _single_document_url(
+        node: NodeInfo,
+        shard_id: int,
+        collection: str,
+        document_id: str,
+    ) -> str:
+        return (
+            f"{node.url}/internal/shards/{shard_id}"
+            f"/collections/{collection}/documents/{document_id}"
+        )
+
+    @staticmethod
     def _search_url(node: NodeInfo, shard_id: int, collection: str) -> str:
         return (
             f"{node.url}/internal/shards/{shard_id}"
             f"/collections/{collection}/search"
         )
-

@@ -32,6 +32,41 @@ class SearchNode:
         self.storage.append_document(shard_id, collection, document)
         return document
 
+    def get_document(self, shard_id: int, collection: str, document_id: str) -> Document:
+        return self._index_for(shard_id, collection).get_document(document_id)
+
+    def list_documents(self, shard_id: int, collection: str) -> list[Document]:
+        return self._index_for(shard_id, collection).list_documents()
+
+    def update_document(
+        self,
+        shard_id: int,
+        collection: str,
+        document_id: str,
+        changes: Document,
+    ) -> Document:
+        if "id" in changes and changes["id"] != document_id:
+            raise ValueError("document id cannot be changed")
+        current = self.get_document(shard_id, collection, document_id)
+        updated = {**current, **changes, "id": document_id}
+        return self.add_document(shard_id, collection, updated)
+
+    def delete_document(
+        self,
+        shard_id: int,
+        collection: str,
+        document_id: str,
+    ) -> Document:
+        index = self._index_for(shard_id, collection)
+        deleted = index.delete_document(document_id)
+        self.storage.append_delete(shard_id, collection, document_id)
+        return deleted
+
+    def list_collections(self) -> list[str]:
+        collections = {collection for _, collection in self.storage.iter_collection_paths()}
+        collections.update(collection for _, collection in self._indexes)
+        return sorted(collections)
+
     def search(
         self,
         shard_id: int,
@@ -49,12 +84,17 @@ class SearchNode:
     def _reload(self) -> None:
         for shard_id, collection in self.storage.iter_collection_paths():
             index = self._index_for(shard_id, collection)
-            for document in self.storage.iter_documents(shard_id, collection):
-                index.add_document(document)
+            for record in self.storage.iter_records(shard_id, collection):
+                if record["op"] == "upsert":
+                    index.add_document(record["document"])
+                elif record["op"] == "delete":
+                    try:
+                        index.delete_document(record["id"])
+                    except KeyError:
+                        continue
 
     def _index_for(self, shard_id: int, collection: str) -> InvertedIndex:
         key = (shard_id, collection)
         if key not in self._indexes:
             self._indexes[key] = InvertedIndex()
         return self._indexes[key]
-

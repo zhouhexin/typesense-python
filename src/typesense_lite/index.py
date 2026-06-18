@@ -34,6 +34,17 @@ class InvertedIndex:
         for term, frequency in terms.items():
             self._index[term][document_id] = frequency
 
+    def get_document(self, document_id: str) -> Document:
+        return self.documents[document_id]
+
+    def list_documents(self) -> list[Document]:
+        return [self.documents[document_id] for document_id in sorted(self.documents)]
+
+    def delete_document(self, document_id: str) -> Document:
+        document = self.documents.pop(document_id)
+        self._remove_document_terms(document_id)
+        return document
+
     def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         scores: dict[str, float] = defaultdict(float)
 

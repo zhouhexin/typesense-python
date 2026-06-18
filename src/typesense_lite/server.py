@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Union
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
@@ -26,6 +27,7 @@ def create_app(
     cluster_config: ClusterInput,
     node_id: str | None = None,
     data_dir: str | Path | None = None,
+    coordinator_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     cluster = _load_cluster(cluster_config)
     app = FastAPI(title="Typesense Lite")
@@ -39,6 +41,10 @@ def create_app(
         def node_health() -> dict[str, Any]:
             return {"ok": True, "role": "node", "node_id": node_id}
 
+        @app.get("/internal/collections")
+        def list_node_collections() -> dict[str, list[str]]:
+            return {"collections": node.list_collections()}
+
         @app.post("/internal/shards/{shard_id}/collections/{collection}/documents")
         def add_node_document(
             shard_id: int,
@@ -49,6 +55,55 @@ def create_app(
                 return node.add_document(shard_id, collection, document)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+
+        @app.get("/internal/shards/{shard_id}/collections/{collection}/documents")
+        def list_node_documents(shard_id: int, collection: str) -> dict[str, Any]:
+            return {"documents": node.list_documents(shard_id, collection)}
+
+        @app.get(
+            "/internal/shards/{shard_id}/collections/{collection}"
+            "/documents/{document_id}"
+        )
+        def get_node_document(
+            shard_id: int,
+            collection: str,
+            document_id: str,
+        ) -> Document:
+            try:
+                return node.get_document(shard_id, collection, document_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="document not found") from error
+
+        @app.patch(
+            "/internal/shards/{shard_id}/collections/{collection}"
+            "/documents/{document_id}"
+        )
+        def update_node_document(
+            shard_id: int,
+            collection: str,
+            document_id: str,
+            document: Document,
+        ) -> Document:
+            try:
+                return node.update_document(shard_id, collection, document_id, document)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="document not found") from error
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+
+        @app.delete(
+            "/internal/shards/{shard_id}/collections/{collection}"
+            "/documents/{document_id}"
+        )
+        def delete_node_document(
+            shard_id: int,
+            collection: str,
+            document_id: str,
+        ) -> Document:
+            try:
+                return node.delete_document(shard_id, collection, document_id)
+            except KeyError as error:
+                raise HTTPException(status_code=404, detail="document not found") from error
 
         @app.get("/internal/shards/{shard_id}/collections/{collection}/search")
         def search_node_documents(
@@ -63,7 +118,7 @@ def create_app(
         return app
 
     if role == "coordinator":
-        coordinator = Coordinator(cluster)
+        coordinator = Coordinator(cluster, client=coordinator_client)
 
         @app.on_event("shutdown")
         async def close_coordinator() -> None:
@@ -103,12 +158,20 @@ def create_app(
                 },
             }
 
+        @app.get("/collections")
+        async def list_collections() -> dict[str, list[str]]:
+            return await coordinator.list_collections()
+
         @app.post("/collections/{collection}/documents")
         async def add_document(collection: str, document: Document) -> dict[str, Any]:
             try:
                 return await coordinator.add_document(collection, document)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+
+        @app.get("/collections/{collection}/documents")
+        async def list_documents(collection: str) -> dict[str, list[Document]]:
+            return await coordinator.list_documents(collection)
 
         @app.get("/collections/{collection}/documents/search")
         async def search_documents(
@@ -117,6 +180,48 @@ def create_app(
             limit: int = Query(10, ge=1, le=100),
         ) -> dict[str, Any]:
             return await coordinator.search(collection, q, limit)
+
+        @app.get("/collections/{collection}/documents/{document_id}")
+        async def get_document(collection: str, document_id: str) -> Document:
+            try:
+                return await coordinator.get_document(collection, document_id)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="document not found",
+                    ) from error
+                raise
+
+        @app.patch("/collections/{collection}/documents/{document_id}")
+        async def update_document(
+            collection: str,
+            document_id: str,
+            document: Document,
+        ) -> dict[str, Any]:
+            try:
+                return await coordinator.update_document(collection, document_id, document)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code in {400, 404}:
+                    raise HTTPException(
+                        status_code=error.response.status_code,
+                        detail=error.response.text,
+                    ) from error
+                raise
+
+        @app.delete("/collections/{collection}/documents/{document_id}")
+        async def delete_document(collection: str, document_id: str) -> dict[str, Any]:
+            try:
+                return await coordinator.delete_document(collection, document_id)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="document not found",
+                    ) from error
+                raise
 
         return app
 
