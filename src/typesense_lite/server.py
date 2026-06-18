@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Union
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 
 from .cluster import ClusterMap
 from .coordinator import Coordinator
@@ -14,6 +15,7 @@ from .node import SearchNode
 from .schemas import Document
 
 ClusterInput = Union[dict[str, Any], str, Path, ClusterMap]
+CONSOLE_HTML = Path(__file__).parent / "web" / "console.html"
 
 
 def create_app(
@@ -64,6 +66,10 @@ def create_app(
         @app.on_event("shutdown")
         async def close_coordinator() -> None:
             await coordinator.aclose()
+
+        @app.get("/", response_class=HTMLResponse)
+        def web_console() -> str:
+            return CONSOLE_HTML.read_text(encoding="utf-8")
 
         @app.get("/health")
         def coordinator_health() -> dict[str, Any]:
