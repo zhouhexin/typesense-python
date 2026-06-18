@@ -50,7 +50,7 @@ def test_data_node_internal_write_and_search(tmp_path) -> None:
     assert search.json()["hits"][0]["id"] == "doc-1"
 
 
-def test_coordinator_serves_web_console() -> None:
+def test_coordinator_serves_search_page_at_root() -> None:
     app = create_app(role="coordinator", cluster_config=CONFIG)
     client = TestClient(app)
 
@@ -58,14 +58,38 @@ def test_coordinator_serves_web_console() -> None:
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "Typesense Lite Console" in response.text
+    assert "Typesense Lite Search" in response.text
+    assert "Search Documents" in response.text
+    assert "Add Document" not in response.text
+
+
+def test_coordinator_serves_search_page_at_search_path() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/search")
+
+    assert response.status_code == 200
+    assert "Typesense Lite Search" in response.text
+
+
+def test_coordinator_serves_admin_page() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "Typesense Lite Admin" in response.text
+    assert "Cluster" in response.text
+    assert "Add Document" in response.text
     assert "fetch('/cluster')" in response.text
 
 
-def test_data_node_does_not_serve_web_console() -> None:
+def test_data_node_does_not_serve_web_pages() -> None:
     app = create_app(role="node", cluster_config=CONFIG, node_id="node-1")
     client = TestClient(app)
 
-    response = client.get("/")
-
-    assert response.status_code == 404
+    assert client.get("/").status_code == 404
+    assert client.get("/search").status_code == 404
+    assert client.get("/admin").status_code == 404

@@ -15,7 +15,9 @@ from .node import SearchNode
 from .schemas import Document
 
 ClusterInput = Union[dict[str, Any], str, Path, ClusterMap]
-CONSOLE_HTML = Path(__file__).parent / "web" / "console.html"
+WEB_DIR = Path(__file__).parent / "web"
+SEARCH_HTML = WEB_DIR / "search.html"
+ADMIN_HTML = WEB_DIR / "admin.html"
 
 
 def create_app(
@@ -68,8 +70,13 @@ def create_app(
             await coordinator.aclose()
 
         @app.get("/", response_class=HTMLResponse)
-        def web_console() -> str:
-            return CONSOLE_HTML.read_text(encoding="utf-8")
+        @app.get("/search", response_class=HTMLResponse)
+        def search_page() -> str:
+            return SEARCH_HTML.read_text(encoding="utf-8")
+
+        @app.get("/admin", response_class=HTMLResponse)
+        def admin_page() -> str:
+            return ADMIN_HTML.read_text(encoding="utf-8")
 
         @app.get("/health")
         def coordinator_health() -> dict[str, Any]:

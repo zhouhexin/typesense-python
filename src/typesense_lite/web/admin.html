@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Typesense Lite Console</title>
+    <title>Typesense Lite Admin</title>
     <style>
       :root {
         color-scheme: light;
@@ -41,7 +41,7 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 24px;
+        gap: 18px;
         max-width: 1180px;
         margin: 0 auto;
         padding: 22px 24px;
@@ -49,19 +49,25 @@
 
       h1,
       h2,
-      h3,
       p {
         margin: 0;
       }
 
       h1 {
         font-size: 22px;
-        font-weight: 700;
+        font-weight: 750;
       }
 
       h2 {
         font-size: 15px;
-        font-weight: 700;
+        font-weight: 750;
+      }
+
+      a {
+        color: var(--accent-dark);
+        font-size: 13px;
+        font-weight: 750;
+        text-decoration: none;
       }
 
       .subtitle {
@@ -70,46 +76,21 @@
         font-size: 13px;
       }
 
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--muted);
-        font-size: 13px;
-        white-space: nowrap;
-      }
-
-      .dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 999px;
-        background: var(--accent);
-      }
-
       main {
         display: grid;
-        grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+        grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
         gap: 18px;
         max-width: 1180px;
         margin: 0 auto;
         padding: 20px 24px 32px;
       }
 
-      section,
       .panel {
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--panel);
         box-shadow: var(--shadow);
-      }
-
-      .panel {
         padding: 16px;
-      }
-
-      .stack {
-        display: grid;
-        gap: 18px;
       }
 
       .section-head {
@@ -125,7 +106,7 @@
         gap: 6px;
         color: var(--muted);
         font-size: 12px;
-        font-weight: 600;
+        font-weight: 650;
       }
 
       input,
@@ -151,15 +132,10 @@
         outline: 3px solid rgba(15, 118, 110, 0.12);
       }
 
-      .form-grid {
+      .form-grid,
+      .cluster-grid {
         display: grid;
         gap: 12px;
-      }
-
-      .form-row {
-        display: grid;
-        grid-template-columns: 1fr 120px;
-        gap: 10px;
       }
 
       button {
@@ -170,7 +146,7 @@
         cursor: pointer;
         font: inherit;
         font-size: 13px;
-        font-weight: 700;
+        font-weight: 750;
         min-height: 38px;
         padding: 0 14px;
       }
@@ -196,17 +172,13 @@
         color: var(--muted);
         font-size: 13px;
         line-height: 1.45;
+        margin-top: 12px;
         padding: 10px 12px;
       }
 
       .message.error {
         background: #fff1f0;
         color: var(--danger);
-      }
-
-      .cluster-grid {
-        display: grid;
-        gap: 10px;
       }
 
       .shard {
@@ -221,7 +193,7 @@
         justify-content: space-between;
         color: var(--text);
         font-size: 13px;
-        font-weight: 700;
+        font-weight: 750;
       }
 
       .meta {
@@ -231,46 +203,6 @@
         line-height: 1.5;
       }
 
-      .results {
-        display: grid;
-        gap: 12px;
-      }
-
-      .hit {
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--panel);
-        padding: 14px;
-      }
-
-      .hit-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 10px;
-      }
-
-      .hit-id {
-        font-size: 14px;
-        font-weight: 700;
-      }
-
-      .badges {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-
-      .badge {
-        border-radius: 999px;
-        background: #e7f5f3;
-        color: var(--accent-dark);
-        font-size: 12px;
-        font-weight: 700;
-        padding: 4px 8px;
-      }
-
       pre {
         overflow: auto;
         border-radius: 6px;
@@ -278,7 +210,7 @@
         color: #e5e7eb;
         font-size: 12px;
         line-height: 1.5;
-        margin: 0;
+        margin: 12px 0 0;
         padding: 12px;
       }
 
@@ -291,10 +223,6 @@
         main {
           grid-template-columns: 1fr;
         }
-
-        .form-row {
-          grid-template-columns: 1fr;
-        }
       }
     </style>
   </head>
@@ -302,90 +230,61 @@
     <header>
       <div class="header-inner">
         <div>
-          <h1>Typesense Lite Console</h1>
-          <p class="subtitle">Local coordinator UI for writing and searching documents.</p>
+          <h1>Typesense Lite Admin</h1>
+          <p class="subtitle">Manage the local cluster and seed searchable documents.</p>
         </div>
-        <div class="status"><span class="dot"></span><span id="status">Loading</span></div>
+        <a href="/search">Search</a>
       </div>
     </header>
 
     <main>
-      <div class="stack">
-        <section class="panel">
-          <div class="section-head">
-            <h2>Cluster</h2>
-            <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
-          </div>
-          <div id="cluster" class="cluster-grid"></div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>Add Document</h2>
-          </div>
-          <form id="add-form" class="form-grid">
-            <label>
-              Collection
-              <input name="collection" value="books" autocomplete="off" />
-            </label>
-            <label>
-              Document ID
-              <input name="id" value="book-100" autocomplete="off" />
-            </label>
-            <label>
-              Title
-              <input name="title" value="Distributed keyword search" autocomplete="off" />
-            </label>
-            <label>
-              Body
-              <textarea name="body">This document is stored on a shard and replicated.</textarea>
-            </label>
-            <label>
-              Extra JSON Fields
-              <textarea name="extra" placeholder='{"author": "demo"}'></textarea>
-            </label>
-            <button type="submit">Add Document</button>
-          </form>
-          <div id="write-message" class="message" hidden></div>
-        </section>
-      </div>
+      <section class="panel">
+        <div class="section-head">
+          <h2>Cluster</h2>
+          <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
+        </div>
+        <div id="cluster" class="cluster-grid"></div>
+      </section>
 
       <section class="panel">
         <div class="section-head">
-          <h2>Search</h2>
+          <h2>Add Document</h2>
         </div>
-        <form id="search-form" class="form-grid">
-          <div class="form-row">
-            <label>
-              Collection
-              <input name="collection" value="books" autocomplete="off" />
-            </label>
-            <label>
-              Limit
-              <input name="limit" type="number" min="1" max="100" value="10" />
-            </label>
-          </div>
+        <form id="add-form" class="form-grid">
           <label>
-            Query
-            <input name="query" value="search" autocomplete="off" />
+            Collection
+            <input name="collection" value="books" autocomplete="off" />
           </label>
-          <button type="submit">Search</button>
+          <label>
+            Document ID
+            <input name="id" value="book-100" autocomplete="off" />
+          </label>
+          <label>
+            Title
+            <input name="title" value="Distributed keyword search" autocomplete="off" />
+          </label>
+          <label>
+            Body
+            <textarea name="body">This document is stored on a shard and replicated.</textarea>
+          </label>
+          <label>
+            Extra JSON Fields
+            <textarea name="extra" placeholder='{"author": "demo"}'></textarea>
+          </label>
+          <button type="submit">Add Document</button>
         </form>
-        <div id="search-message" class="message" hidden></div>
-        <div id="results" class="results" style="margin-top: 14px"></div>
+        <div id="write-message" class="message" hidden></div>
+        <pre id="write-output" hidden></pre>
       </section>
     </main>
 
     <script>
-      const statusEl = document.querySelector("#status");
       const clusterEl = document.querySelector("#cluster");
-      const resultsEl = document.querySelector("#results");
       const writeMessageEl = document.querySelector("#write-message");
-      const searchMessageEl = document.querySelector("#search-message");
+      const writeOutputEl = document.querySelector("#write-output");
 
       document.querySelector("#refresh-cluster").addEventListener("click", loadCluster);
       document.querySelector("#add-form").addEventListener("submit", addDocument);
-      document.querySelector("#search-form").addEventListener("submit", searchDocuments);
 
       loadCluster();
 
@@ -393,10 +292,8 @@
         try {
           const response = await fetch('/cluster');
           const cluster = await readJson(response);
-          statusEl.textContent = `Coordinator ${cluster.coordinator.host}:${cluster.coordinator.port}`;
           renderCluster(cluster);
         } catch (error) {
-          statusEl.textContent = "Cluster unavailable";
           clusterEl.innerHTML = "";
           showMessage(clusterEl, error.message, true);
         }
@@ -405,6 +302,8 @@
       async function addDocument(event) {
         event.preventDefault();
         hideMessage(writeMessageEl);
+        writeOutputEl.hidden = true;
+        writeOutputEl.textContent = "";
 
         const form = new FormData(event.currentTarget);
         const collection = clean(form.get("collection"));
@@ -430,31 +329,10 @@
             writeMessageEl,
             `Stored ${payload.id} on shard ${payload.shard_id}, primary ${payload.primary}.`
           );
+          writeOutputEl.hidden = false;
+          writeOutputEl.textContent = JSON.stringify(payload, null, 2);
         } catch (error) {
           showMessage(writeMessageEl, error.message, true);
-        }
-      }
-
-      async function searchDocuments(event) {
-        event.preventDefault();
-        hideMessage(searchMessageEl);
-        resultsEl.innerHTML = "";
-
-        const form = new FormData(event.currentTarget);
-        const collection = clean(form.get("collection"));
-        const query = clean(form.get("query"));
-        const limit = clean(form.get("limit")) || "10";
-        const params = new URLSearchParams({ q: query, limit });
-
-        try {
-          const response = await fetch(
-            `/collections/${encodeURIComponent(collection)}/documents/search?${params}`
-          );
-          const payload = await readJson(response);
-          showMessage(searchMessageEl, `${payload.found} result(s) found.`);
-          renderResults(payload.hits || []);
-        } catch (error) {
-          showMessage(searchMessageEl, error.message, true);
         }
       }
 
@@ -478,31 +356,6 @@
             </div>
           `;
           clusterEl.appendChild(shard);
-        });
-      }
-
-      function renderResults(hits) {
-        if (!hits.length) {
-          resultsEl.innerHTML = `<div class="message">No matching documents.</div>`;
-          return;
-        }
-
-        resultsEl.innerHTML = "";
-        hits.forEach((hit) => {
-          const item = document.createElement("article");
-          item.className = "hit";
-          item.innerHTML = `
-            <div class="hit-head">
-              <div class="hit-id">${escapeHtml(hit.id)}</div>
-              <div class="badges">
-                <span class="badge">score ${escapeHtml(hit.score)}</span>
-                <span class="badge">shard ${escapeHtml(hit.shard_id)}</span>
-                <span class="badge">${escapeHtml(hit.node_id)}</span>
-              </div>
-            </div>
-            <pre>${escapeHtml(JSON.stringify(hit.document, null, 2))}</pre>
-          `;
-          resultsEl.appendChild(item);
         });
       }
 
