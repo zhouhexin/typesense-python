@@ -10,6 +10,7 @@ build/
 *.egg*
 env/
 .cache/
+.data/
 .idea
 venv
 .venv/
