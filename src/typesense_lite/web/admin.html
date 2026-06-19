@@ -659,20 +659,20 @@
         }
 
         hideMessage(documentMessageEl);
-        documents.forEach((document) => {
-          const title = document.title || document.name || "";
+        documents.forEach((storedDocument) => {
+          const title = storedDocument.title || storedDocument.name || "";
           const button = document.createElement("button");
           button.type = "button";
           button.className = "document-button";
-          button.dataset.documentId = document.id;
+          button.dataset.documentId = storedDocument.id;
           button.innerHTML = `
             <span>
-              <span class="document-id">${escapeHtml(document.id)}</span>
+              <span class="document-id">${escapeHtml(storedDocument.id)}</span>
               <span class="meta">${escapeHtml(title)}</span>
             </span>
-            <span class="pill">${Object.keys(document).length} fields</span>
+            <span class="pill">${Object.keys(storedDocument).length} fields</span>
           `;
-          button.addEventListener("click", () => selectDocument(document.id));
+          button.addEventListener("click", () => selectDocument(storedDocument.id));
           documentsEl.appendChild(button);
         });
         renderActiveDocument();

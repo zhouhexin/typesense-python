@@ -253,6 +253,16 @@ def test_coordinator_serves_admin_page() -> None:
     assert 'method: "DELETE"' in response.text
 
 
+def test_admin_page_does_not_shadow_dom_document_when_rendering_documents() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "documents.forEach((document)" not in response.text
+
+
 def test_data_node_does_not_serve_web_pages() -> None:
     app = create_app(role="node", cluster_config=CONFIG, node_id="node-1")
     client = TestClient(app)
