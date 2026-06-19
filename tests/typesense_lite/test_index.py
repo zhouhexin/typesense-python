@@ -24,6 +24,16 @@ def test_index_replaces_existing_document() -> None:
     assert index.search("new", limit=10)[0]["id"] == "doc-1"
 
 
+def test_index_searches_chinese_text() -> None:
+    index = InvertedIndex()
+    index.add_document({"id": "doc-1", "body": "这是一个分布式中文搜索引擎"})
+
+    hits = index.search("中文搜索", limit=10)
+
+    assert [hit["id"] for hit in hits] == ["doc-1"]
+    assert hits[0]["score"] > 0
+
+
 def test_index_requires_string_document_id() -> None:
     index = InvertedIndex()
 
