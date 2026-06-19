@@ -245,7 +245,12 @@ def test_coordinator_serves_admin_page() -> None:
     assert "Typesense Lite Admin" in response.text
     assert "Cluster" in response.text
     assert "Add Document" in response.text
+    assert "Collections" in response.text
+    assert "Documents" in response.text
     assert "fetch('/cluster')" in response.text
+    assert "fetch('/collections')" in response.text
+    assert 'method: "PATCH"' in response.text
+    assert 'method: "DELETE"' in response.text
 
 
 def test_data_node_does_not_serve_web_pages() -> None:

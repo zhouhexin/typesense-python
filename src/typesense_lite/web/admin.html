@@ -16,6 +16,7 @@
         --accent: #0f766e;
         --accent-dark: #115e59;
         --danger: #b42318;
+        --danger-bg: #fff1f0;
         --shadow: 0 12px 32px rgba(20, 30, 46, 0.08);
       }
 
@@ -42,7 +43,7 @@
         align-items: center;
         justify-content: space-between;
         gap: 18px;
-        max-width: 1180px;
+        max-width: 1240px;
         margin: 0 auto;
         padding: 22px 24px;
       }
@@ -78,11 +79,17 @@
 
       main {
         display: grid;
-        grid-template-columns: minmax(280px, 390px) minmax(0, 1fr);
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
         gap: 18px;
-        max-width: 1180px;
+        max-width: 1240px;
         margin: 0 auto;
         padding: 20px 24px 32px;
+      }
+
+      .stack {
+        display: grid;
+        align-content: start;
+        gap: 18px;
       }
 
       .panel {
@@ -99,6 +106,19 @@
         justify-content: space-between;
         gap: 12px;
         margin-bottom: 14px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
       }
 
       label {
@@ -126,6 +146,13 @@
         resize: vertical;
       }
 
+      .editor {
+        min-height: 230px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+          monospace;
+        line-height: 1.5;
+      }
+
       input:focus,
       textarea:focus {
         border-color: var(--accent);
@@ -133,7 +160,9 @@
       }
 
       .form-grid,
-      .cluster-grid {
+      .cluster-grid,
+      .collection-list,
+      .document-list {
         display: grid;
         gap: 12px;
       }
@@ -155,6 +184,11 @@
         background: var(--accent-dark);
       }
 
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
       button.secondary {
         border: 1px solid var(--line);
         background: var(--panel-soft);
@@ -164,6 +198,50 @@
       button.secondary:hover {
         border-color: #b8c2cf;
         background: #eef2f7;
+      }
+
+      button.danger {
+        background: var(--danger);
+      }
+
+      button.danger:hover {
+        background: #912018;
+      }
+
+      .collection-button,
+      .document-button {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-soft);
+        color: var(--text);
+        min-height: 40px;
+        padding: 0 11px;
+        text-align: left;
+      }
+
+      .collection-button.active,
+      .document-button.active {
+        border-color: var(--accent);
+        background: #e6f5f3;
+      }
+
+      .document-id {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .pill {
+        border-radius: 999px;
+        background: #e8edf4;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 750;
+        padding: 3px 8px;
       }
 
       .message {
@@ -177,7 +255,7 @@
       }
 
       .message.error {
-        background: #fff1f0;
+        background: var(--danger-bg);
         color: var(--danger);
       }
 
@@ -214,13 +292,19 @@
         padding: 12px;
       }
 
-      @media (max-width: 860px) {
+      @media (max-width: 920px) {
         .header-inner {
           align-items: flex-start;
           flex-direction: column;
         }
 
         main {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .toolbar {
           grid-template-columns: 1fr;
         }
       }
@@ -231,62 +315,123 @@
       <div class="header-inner">
         <div>
           <h1>Typesense Lite Admin</h1>
-          <p class="subtitle">Manage the local cluster and seed searchable documents.</p>
+          <p class="subtitle">Manage collections, documents, and the local cluster.</p>
         </div>
         <a href="/search">Search</a>
       </div>
     </header>
 
     <main>
-      <section class="panel">
-        <div class="section-head">
-          <h2>Cluster</h2>
-          <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
-        </div>
-        <div id="cluster" class="cluster-grid"></div>
-      </section>
+      <div class="stack">
+        <section class="panel">
+          <div class="section-head">
+            <h2>Cluster</h2>
+            <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
+          </div>
+          <div id="cluster" class="cluster-grid"></div>
+        </section>
 
-      <section class="panel">
-        <div class="section-head">
-          <h2>Add Document</h2>
-        </div>
-        <form id="add-form" class="form-grid">
-          <label>
-            Collection
-            <input name="collection" value="books" autocomplete="off" />
-          </label>
-          <label>
-            Document ID
-            <input name="id" value="book-100" autocomplete="off" />
-          </label>
-          <label>
-            Title
-            <input name="title" value="Distributed keyword search" autocomplete="off" />
-          </label>
-          <label>
-            Body
-            <textarea name="body">This document is stored on a shard and replicated.</textarea>
-          </label>
-          <label>
-            Extra JSON Fields
-            <textarea name="extra" placeholder='{"author": "demo"}'></textarea>
-          </label>
-          <button type="submit">Add Document</button>
-        </form>
-        <div id="write-message" class="message" hidden></div>
-        <pre id="write-output" hidden></pre>
-      </section>
+        <section class="panel">
+          <div class="section-head">
+            <h2>Collections</h2>
+            <button class="secondary" id="refresh-collections" type="button">Refresh</button>
+          </div>
+          <div class="toolbar">
+            <input id="collection-input" value="books" autocomplete="off" />
+            <button id="load-documents" type="button">Load</button>
+          </div>
+          <div id="collections" class="collection-list"></div>
+          <div id="collection-message" class="message" hidden></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <div class="section-head">
+            <h2>Add Document</h2>
+          </div>
+          <form id="add-form" class="form-grid">
+            <label>
+              Collection
+              <input name="collection" value="books" autocomplete="off" />
+            </label>
+            <label>
+              Document ID
+              <input name="id" value="book-100" autocomplete="off" />
+            </label>
+            <label>
+              Title
+              <input name="title" value="Distributed keyword search" autocomplete="off" />
+            </label>
+            <label>
+              Body
+              <textarea name="body">This document is stored on a shard and replicated.</textarea>
+            </label>
+            <label>
+              Extra JSON Fields
+              <textarea name="extra" placeholder='{"author": "demo"}'></textarea>
+            </label>
+            <button type="submit">Add Document</button>
+          </form>
+          <div id="write-message" class="message" hidden></div>
+          <pre id="write-output" hidden></pre>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Documents</h2>
+            <button class="secondary" id="refresh-documents" type="button">Refresh</button>
+          </div>
+          <div id="documents" class="document-list"></div>
+          <div id="document-message" class="message" hidden></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Document Detail</h2>
+            <span id="selected-document" class="pill">none</span>
+          </div>
+          <textarea id="document-json" class="editor" spellcheck="false"></textarea>
+          <div class="actions" style="margin-top: 12px">
+            <button id="update-document" type="button" disabled>Update</button>
+            <button class="danger" id="delete-document" type="button" disabled>Delete</button>
+          </div>
+          <div id="detail-message" class="message" hidden></div>
+        </section>
+      </div>
     </main>
 
     <script>
       const clusterEl = document.querySelector("#cluster");
+      const collectionsEl = document.querySelector("#collections");
+      const collectionInputEl = document.querySelector("#collection-input");
+      const collectionMessageEl = document.querySelector("#collection-message");
+      const documentsEl = document.querySelector("#documents");
+      const documentMessageEl = document.querySelector("#document-message");
+      const selectedDocumentEl = document.querySelector("#selected-document");
+      const documentJsonEl = document.querySelector("#document-json");
+      const updateDocumentEl = document.querySelector("#update-document");
+      const deleteDocumentEl = document.querySelector("#delete-document");
+      const detailMessageEl = document.querySelector("#detail-message");
       const writeMessageEl = document.querySelector("#write-message");
       const writeOutputEl = document.querySelector("#write-output");
 
+      let currentCollection = "books";
+      let selectedDocumentId = "";
+
       document.querySelector("#refresh-cluster").addEventListener("click", loadCluster);
+      document.querySelector("#refresh-collections").addEventListener("click", loadCollections);
+      document.querySelector("#load-documents").addEventListener("click", () => {
+        selectCollection(clean(collectionInputEl.value));
+      });
+      document.querySelector("#refresh-documents").addEventListener("click", loadDocuments);
       document.querySelector("#add-form").addEventListener("submit", addDocument);
+      updateDocumentEl.addEventListener("click", updateSelectedDocument);
+      deleteDocumentEl.addEventListener("click", deleteSelectedDocument);
 
       loadCluster();
+      loadCollections();
+      loadDocuments();
 
       async function loadCluster() {
         try {
@@ -296,6 +441,40 @@
         } catch (error) {
           clusterEl.innerHTML = "";
           showMessage(clusterEl, error.message, true);
+        }
+      }
+
+      async function loadCollections() {
+        hideMessage(collectionMessageEl);
+        try {
+          const response = await fetch('/collections');
+          const payload = await readJson(response);
+          renderCollections(payload.collections || []);
+        } catch (error) {
+          collectionsEl.innerHTML = "";
+          showMessage(collectionMessageEl, error.message, true);
+        }
+      }
+
+      async function loadDocuments() {
+        hideMessage(documentMessageEl);
+        clearSelectedDocument();
+
+        if (!currentCollection) {
+          documentsEl.innerHTML = "";
+          showMessage(documentMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(currentCollection)}/documents`
+          );
+          const payload = await readJson(response);
+          renderDocuments(payload.documents || []);
+        } catch (error) {
+          documentsEl.innerHTML = "";
+          showMessage(documentMessageEl, error.message, true);
         }
       }
 
@@ -331,8 +510,96 @@
           );
           writeOutputEl.hidden = false;
           writeOutputEl.textContent = JSON.stringify(payload, null, 2);
+          currentCollection = collection;
+          collectionInputEl.value = collection;
+          await loadCollections();
+          await loadDocuments();
         } catch (error) {
           showMessage(writeMessageEl, error.message, true);
+        }
+      }
+
+      async function selectCollection(collection) {
+        if (!collection) {
+          showMessage(collectionMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        currentCollection = collection;
+        collectionInputEl.value = collection;
+        renderActiveCollection();
+        await loadDocuments();
+      }
+
+      async function selectDocument(documentId) {
+        hideMessage(detailMessageEl);
+        selectedDocumentId = documentId;
+        selectedDocumentEl.textContent = documentId;
+        updateDocumentEl.disabled = false;
+        deleteDocumentEl.disabled = false;
+        renderActiveDocument();
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(currentCollection)}/documents/${encodeURIComponent(documentId)}`
+          );
+          const document = await readJson(response);
+          documentJsonEl.value = JSON.stringify(document, null, 2);
+        } catch (error) {
+          showMessage(detailMessageEl, error.message, true);
+        }
+      }
+
+      async function updateSelectedDocument() {
+        hideMessage(detailMessageEl);
+
+        if (!selectedDocumentId) {
+          showMessage(detailMessageEl, "Select a document first.", true);
+          return;
+        }
+
+        try {
+          const document = JSON.parse(documentJsonEl.value);
+          const response = await fetch(
+            `/collections/${encodeURIComponent(currentCollection)}/documents/${encodeURIComponent(selectedDocumentId)}`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(document),
+            }
+          );
+          const payload = await readJson(response);
+          documentJsonEl.value = JSON.stringify(payload.document, null, 2);
+          showMessage(detailMessageEl, `Updated ${payload.id}.`);
+          await loadDocuments();
+          selectedDocumentId = payload.id;
+          renderActiveDocument();
+        } catch (error) {
+          showMessage(detailMessageEl, error.message, true);
+        }
+      }
+
+      async function deleteSelectedDocument() {
+        hideMessage(detailMessageEl);
+
+        if (!selectedDocumentId) {
+          showMessage(detailMessageEl, "Select a document first.", true);
+          return;
+        }
+
+        const response = await fetch(
+          `/collections/${encodeURIComponent(currentCollection)}/documents/${encodeURIComponent(selectedDocumentId)}`,
+          { method: "DELETE" }
+        );
+
+        try {
+          const payload = await readJson(response);
+          showMessage(detailMessageEl, `Deleted ${payload.id}.`);
+          clearSelectedDocument();
+          await loadCollections();
+          await loadDocuments();
+        } catch (error) {
+          showMessage(detailMessageEl, error.message, true);
         }
       }
 
@@ -357,6 +624,79 @@
           `;
           clusterEl.appendChild(shard);
         });
+      }
+
+      function renderCollections(collections) {
+        collectionsEl.innerHTML = "";
+
+        if (!collections.length) {
+          showMessage(collectionMessageEl, "No collections found.");
+          return;
+        }
+
+        hideMessage(collectionMessageEl);
+        collections.forEach((collection) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "collection-button";
+          button.dataset.collection = collection;
+          button.innerHTML = `
+            <span>${escapeHtml(collection)}</span>
+            <span class="pill">open</span>
+          `;
+          button.addEventListener("click", () => selectCollection(collection));
+          collectionsEl.appendChild(button);
+        });
+        renderActiveCollection();
+      }
+
+      function renderDocuments(documents) {
+        documentsEl.innerHTML = "";
+
+        if (!documents.length) {
+          showMessage(documentMessageEl, `No documents in ${currentCollection}.`);
+          return;
+        }
+
+        hideMessage(documentMessageEl);
+        documents.forEach((document) => {
+          const title = document.title || document.name || "";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "document-button";
+          button.dataset.documentId = document.id;
+          button.innerHTML = `
+            <span>
+              <span class="document-id">${escapeHtml(document.id)}</span>
+              <span class="meta">${escapeHtml(title)}</span>
+            </span>
+            <span class="pill">${Object.keys(document).length} fields</span>
+          `;
+          button.addEventListener("click", () => selectDocument(document.id));
+          documentsEl.appendChild(button);
+        });
+        renderActiveDocument();
+      }
+
+      function renderActiveCollection() {
+        document.querySelectorAll(".collection-button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.collection === currentCollection);
+        });
+      }
+
+      function renderActiveDocument() {
+        document.querySelectorAll(".document-button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.documentId === selectedDocumentId);
+        });
+      }
+
+      function clearSelectedDocument() {
+        selectedDocumentId = "";
+        selectedDocumentEl.textContent = "none";
+        documentJsonEl.value = "";
+        updateDocumentEl.disabled = true;
+        deleteDocumentEl.disabled = true;
+        renderActiveDocument();
       }
 
       async function readJson(response) {
