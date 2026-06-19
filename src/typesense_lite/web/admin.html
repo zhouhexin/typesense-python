@@ -269,9 +269,67 @@
       .shard-title {
         display: flex;
         justify-content: space-between;
+        align-items: center;
         color: var(--text);
         font-size: 13px;
         font-weight: 750;
+      }
+
+      .status-badge {
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 750;
+        padding: 2px 8px;
+        text-transform: uppercase;
+      }
+
+      .status-healthy {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .status-degraded {
+        background: #fef3c7;
+        color: #92400e;
+      }
+
+      .status-unavailable {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .health-node {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-soft);
+        font-size: 13px;
+      }
+
+      .health-node-ok {
+        border-left: 3px solid #22c55e;
+      }
+
+      .health-node-fail {
+        border-left: 3px solid #ef4444;
+      }
+
+      .health-node-name {
+        font-weight: 650;
+      }
+
+      .health-node-url {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .health-node-error {
+        color: #ef4444;
+        font-size: 12px;
+        margin-top: 2px;
       }
 
       .meta {
@@ -349,6 +407,16 @@
             <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
           </div>
           <div id="cluster" class="cluster-grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Cluster Health</h2>
+            <button class="secondary" id="refresh-health" type="button">Refresh</button>
+          </div>
+          <div id="health-nodes"></div>
+          <div id="health-shards"></div>
+          <div id="health-message" class="message" hidden></div>
         </section>
 
         <section class="panel">
@@ -470,11 +538,15 @@
       const uploadFileEl = document.querySelector("#upload-file");
       const importMessageEl = document.querySelector("#import-message");
       const importResultsEl = document.querySelector("#import-results");
+      const healthNodesEl = document.querySelector("#health-nodes");
+      const healthShardsEl = document.querySelector("#health-shards");
+      const healthMessageEl = document.querySelector("#health-message");
 
       let currentCollection = "books";
       let selectedDocumentId = "";
 
       document.querySelector("#refresh-cluster").addEventListener("click", loadCluster);
+      document.querySelector("#refresh-health").addEventListener("click", loadHealth);
       document.querySelector("#refresh-collections").addEventListener("click", loadCollections);
       document.querySelector("#load-documents").addEventListener("click", () => {
         selectCollection(clean(collectionInputEl.value));
@@ -487,6 +559,7 @@
       deleteDocumentEl.addEventListener("click", deleteSelectedDocument);
 
       loadCluster();
+      loadHealth();
       loadCollections();
       loadDocuments();
 
@@ -761,6 +834,73 @@
           `;
           clusterEl.appendChild(shard);
         });
+      }
+
+      async function loadHealth() {
+        hideMessage(healthMessageEl);
+        try {
+          const response = await fetch('/cluster/health');
+          const health = await readJson(response);
+          renderHealth(health);
+        } catch (error) {
+          healthNodesEl.innerHTML = "";
+          healthShardsEl.innerHTML = "";
+          showMessage(healthMessageEl, error.message, true);
+        }
+      }
+
+      function renderHealth(health) {
+        // Render nodes
+        const nodeEntries = Object.entries(health.nodes || {});
+        if (nodeEntries.length === 0) {
+          healthNodesEl.innerHTML = '<div class="message">No nodes configured.</div>';
+        } else {
+          healthNodesEl.innerHTML = nodeEntries.map(([nodeId, status]) => {
+            const isOk = status.ok === true;
+            const statusClass = isOk ? "health-node-ok" : "health-node-fail";
+            const errorHtml = status.error
+              ? `<div class="health-node-error">${escapeHtml(status.error)}</div>`
+              : "";
+            return `
+              <div class="health-node ${statusClass}">
+                <div>
+                  <div class="health-node-name">${escapeHtml(nodeId)}</div>
+                  <div class="health-node-url">${escapeHtml(status.url || "")}</div>
+                  ${errorHtml}
+                </div>
+                <span class="status-badge ${isOk ? "status-healthy" : "status-unavailable"}">
+                  ${isOk ? "ok" : "fail"}
+                </span>
+              </div>
+            `;
+          }).join("");
+        }
+
+        // Render shards
+        const shardEntries = Object.entries(health.shards || {});
+        if (shardEntries.length === 0) {
+          healthShardsEl.innerHTML = '<div class="message">No shards configured.</div>';
+        } else {
+          healthShardsEl.innerHTML = shardEntries.map(([shardId, status]) => {
+            const isHealthy = status.status === "healthy";
+            const isUnavailable = status.status === "unavailable";
+            const statusClass = isHealthy
+              ? "status-healthy"
+              : isUnavailable
+                ? "status-unavailable"
+                : "status-degraded";
+            return `
+              <div class="shard" style="margin-top: 8px;">
+                <div class="shard-title">
+                  <span>Shard ${escapeHtml(shardId)}</span>
+                  <span class="status-badge ${statusClass}">
+                    ${escapeHtml(status.status || "unknown")}
+                  </span>
+                </div>
+              </div>
+            `;
+          }).join("");
+        }
       }
 
       function renderCollections(collections) {

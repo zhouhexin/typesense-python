@@ -139,6 +139,10 @@ def create_app(
         def coordinator_health() -> dict[str, Any]:
             return {"ok": True, "role": "coordinator"}
 
+        @app.get("/cluster/health")
+        async def cluster_health() -> dict[str, Any]:
+            return await coordinator.cluster_health()
+
         @app.get("/cluster")
         def get_cluster() -> dict[str, Any]:
             return {

@@ -3,6 +3,7 @@ from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from typesense_lite.server import create_app
@@ -413,6 +414,32 @@ def test_admin_page_does_not_shadow_dom_document_when_rendering_documents() -> N
     assert "documents.forEach((document)" not in response.text
 
 
+def test_admin_page_includes_cluster_health_panel() -> None:
+    """Admin page includes Cluster Health panel with refresh button."""
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "Cluster Health" in response.text
+    assert 'id="refresh-health"' in response.text
+    assert "fetch('/cluster/health')" in response.text
+    assert 'id="health-nodes"' in response.text
+    assert 'id="health-shards"' in response.text
+
+
+def test_admin_page_maps_unavailable_shards_to_unavailable_status() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert 'status.status === "unavailable"' in response.text
+    assert 'status-unavailable' in response.text
+
+
 def test_data_node_does_not_serve_web_pages() -> None:
     app = create_app(role="node", cluster_config=CONFIG, node_id="node-1")
     client = TestClient(app)
@@ -420,6 +447,64 @@ def test_data_node_does_not_serve_web_pages() -> None:
     assert client.get("/").status_code == 404
     assert client.get("/search").status_code == 404
     assert client.get("/admin").status_code == 404
+
+
+def test_data_node_does_not_expose_cluster_health() -> None:
+    """Data node should not expose /cluster/health endpoint."""
+    app = create_app(role="node", cluster_config=CONFIG, node_id="node-1")
+    client = TestClient(app)
+
+    assert client.get("/cluster/health").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_coordinator_cluster_health_endpoint(tmp_path) -> None:
+    """Coordinator /cluster/health endpoint returns node and shard status."""
+    health_config = {
+        "coordinator": {"host": "127.0.0.1", "port": 9100},
+        "shard_count": 1,
+        "nodes": [
+            {"id": "node-1", "host": "127.0.0.1", "port": 9101},
+            {"id": "node-2", "host": "127.0.0.1", "port": 9102},
+        ],
+        "shards": {
+            "0": {"primary": "node-1", "replicas": ["node-2"]},
+        },
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ok": True, "role": "node", "node_id": request.url.host})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        app = create_app(
+            role="coordinator",
+            cluster_config=health_config,
+            data_dir=tmp_path,
+            coordinator_client=client,
+        )
+        test_client = TestClient(app)
+        response = test_client.get("/cluster/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    # Should have nodes and shards
+    assert "nodes" in payload
+    assert "shards" in payload
+
+    # Should have both nodes
+    assert "node-1" in payload["nodes"]
+    assert "node-2" in payload["nodes"]
+
+    # Both nodes should be healthy
+    assert payload["nodes"]["node-1"]["ok"] is True
+    assert payload["nodes"]["node-2"]["ok"] is True
+
+    # Should have shard 0
+    assert "0" in payload["shards"]
+
+    # Shard should be healthy
+    assert payload["shards"]["0"]["status"] == "healthy"
 
 
 def make_docx(*paragraphs: str) -> bytes:

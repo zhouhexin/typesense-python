@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from .cluster import ClusterMap
+from .health import collect_cluster_health
 from .schemas import Document, NodeInfo, SearchHit
 
 
@@ -312,3 +313,8 @@ class Coordinator:
             f"{node.url}/internal/shards/{shard_id}"
             f"/collections/{collection}/search"
         )
+
+    async def cluster_health(self) -> dict[str, Any]:
+        """Collect health status from all nodes in the cluster."""
+        report = await collect_cluster_health(self.cluster, self._client)
+        return report.to_dict()
