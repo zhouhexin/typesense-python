@@ -18,6 +18,52 @@ CONFIG = {
 }
 
 
+def mock_single_node_client(documents: dict[str, dict]) -> httpx.AsyncClient:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+
+        if path == "/internal/collections":
+            collections = ["books"] if documents else []
+            return httpx.Response(200, json={"collections": collections})
+
+        if path == "/internal/shards/0/collections/books/documents":
+            if request.method == "POST":
+                document = json.loads(request.content.decode("utf-8"))
+                documents[document["id"]] = document
+                return httpx.Response(200, json=document)
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={"documents": [documents[key] for key in sorted(documents)]},
+                )
+
+        prefix = "/internal/shards/0/collections/books/documents/"
+        if path.startswith(prefix):
+            document_id = path.removeprefix(prefix)
+            if request.method == "GET":
+                if document_id not in documents:
+                    return httpx.Response(404, json={"detail": "document not found"})
+                return httpx.Response(200, json=documents[document_id])
+            if request.method == "PATCH":
+                if document_id not in documents:
+                    return httpx.Response(404, json={"detail": "document not found"})
+                changes = json.loads(request.content.decode("utf-8"))
+                documents[document_id] = {
+                    **documents[document_id],
+                    **changes,
+                    "id": document_id,
+                }
+                return httpx.Response(200, json=documents[document_id])
+            if request.method == "DELETE":
+                if document_id not in documents:
+                    return httpx.Response(404, json={"detail": "document not found"})
+                return httpx.Response(200, json=documents.pop(document_id))
+
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
 def test_data_node_health() -> None:
     app = create_app(role="node", cluster_config=CONFIG, node_id="node-1")
     client = TestClient(app)
@@ -138,49 +184,11 @@ def test_data_node_internal_lists_collections(tmp_path) -> None:
 
 def test_coordinator_public_document_routes_with_single_node(tmp_path) -> None:
     documents: dict[str, dict] = {}
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-
-        if path == "/internal/collections":
-            collections = ["books"] if documents else []
-            return httpx.Response(200, json={"collections": collections})
-
-        if path == "/internal/shards/0/collections/books/documents":
-            if request.method == "POST":
-                document = json.loads(request.content.decode("utf-8"))
-                documents[document["id"]] = document
-                return httpx.Response(200, json=document)
-            if request.method == "GET":
-                return httpx.Response(
-                    200,
-                    json={"documents": [documents[key] for key in sorted(documents)]},
-                )
-
-        if path == "/internal/shards/0/collections/books/documents/doc-1":
-            if request.method == "GET":
-                if "doc-1" not in documents:
-                    return httpx.Response(404, json={"detail": "document not found"})
-                return httpx.Response(200, json=documents["doc-1"])
-            if request.method == "PATCH":
-                if "doc-1" not in documents:
-                    return httpx.Response(404, json={"detail": "document not found"})
-                changes = json.loads(request.content.decode("utf-8"))
-                documents["doc-1"] = {**documents["doc-1"], **changes, "id": "doc-1"}
-                return httpx.Response(200, json=documents["doc-1"])
-            if request.method == "DELETE":
-                if "doc-1" not in documents:
-                    return httpx.Response(404, json={"detail": "document not found"})
-                return httpx.Response(200, json=documents.pop("doc-1"))
-
-        raise AssertionError(f"unexpected request {request.method} {request.url}")
-
-    coordinator_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     app = create_app(
         role="coordinator",
         cluster_config=CONFIG,
         data_dir=tmp_path,
-        coordinator_client=coordinator_client,
+        coordinator_client=mock_single_node_client(documents),
     )
     client = TestClient(app)
 
@@ -210,6 +218,95 @@ def test_coordinator_public_document_routes_with_single_node(tmp_path) -> None:
     assert deleted.status_code == 200
     assert deleted.json()["id"] == "doc-1"
     assert missing.status_code == 404
+
+
+def test_coordinator_imports_multiple_documents_with_single_node(tmp_path) -> None:
+    documents: dict[str, dict] = {}
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=mock_single_node_client(documents),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/collections/books/documents/import",
+        json=[
+            {"id": "doc-1", "title": "A"},
+            {"id": "doc-2", "title": "B"},
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == 2
+    assert response.json()["failed"] == 0
+    assert [result["id"] for result in response.json()["results"]] == ["doc-1", "doc-2"]
+    assert sorted(documents) == ["doc-1", "doc-2"]
+
+
+def test_coordinator_import_reports_invalid_documents_without_stopping(tmp_path) -> None:
+    documents: dict[str, dict] = {}
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=mock_single_node_client(documents),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/collections/books/documents/import",
+        json=[
+            {"id": "doc-1", "title": "A"},
+            {"title": "Missing id"},
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert response.json()["succeeded"] == 1
+    assert response.json()["failed"] == 1
+    assert response.json()["results"][1]["ok"] is False
+    assert sorted(documents) == ["doc-1"]
+
+
+def test_coordinator_uploads_txt_file_with_single_node(tmp_path) -> None:
+    documents: dict[str, dict] = {}
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=mock_single_node_client(documents),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/collections/books/documents/upload",
+        files={"file": ("notes.txt", b"searchable uploaded text", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["succeeded"] == 1
+    assert response.json()["results"][0]["id"] == "notes-txt"
+    assert documents["notes-txt"]["body"] == "searchable uploaded text"
+
+
+def test_coordinator_upload_rejects_unsupported_file_type(tmp_path) -> None:
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=mock_single_node_client({}),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/collections/books/documents/upload",
+        files={"file": ("books.csv", b"id,title\n1,A\n", "text/csv")},
+    )
+
+    assert response.status_code == 400
 
 
 def test_coordinator_serves_search_page_at_root() -> None:
@@ -245,10 +342,14 @@ def test_coordinator_serves_admin_page() -> None:
     assert "Typesense Lite Admin" in response.text
     assert "Cluster" in response.text
     assert "Add Document" in response.text
+    assert "Import Documents" in response.text
     assert "Collections" in response.text
     assert "Documents" in response.text
+    assert 'type="file"' in response.text
     assert "fetch('/cluster')" in response.text
     assert "fetch('/collections')" in response.text
+    assert "/documents/import" in response.text
+    assert "/documents/upload" in response.text
     assert 'method: "PATCH"' in response.text
     assert 'method: "DELETE"' in response.text
 

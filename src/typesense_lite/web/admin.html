@@ -292,6 +292,26 @@
         padding: 12px;
       }
 
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-top: 12px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 8px 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 750;
+      }
+
       @media (max-width: 920px) {
         .header-inner {
           align-items: flex-start;
@@ -379,6 +399,36 @@
 
         <section class="panel">
           <div class="section-head">
+            <h2>Import Documents</h2>
+          </div>
+          <form id="import-json-form" class="form-grid">
+            <label>
+              Collection
+              <input id="import-collection" name="collection" value="books" autocomplete="off" />
+            </label>
+            <label>
+              JSON Documents
+              <textarea
+                id="import-json"
+                name="documents"
+                placeholder='[{"id": "doc-1", "title": "A", "body": "hello search"}]'
+              ></textarea>
+            </label>
+            <button type="submit">Import JSON</button>
+          </form>
+          <form id="upload-form" class="form-grid" style="margin-top: 12px">
+            <label>
+              Upload File
+              <input id="upload-file" name="file" type="file" accept=".txt,.md,.json,.jsonl" />
+            </label>
+            <button class="secondary" type="submit">Upload File</button>
+          </form>
+          <div id="import-message" class="message" hidden></div>
+          <div id="import-results" hidden></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
             <h2>Documents</h2>
             <button class="secondary" id="refresh-documents" type="button">Refresh</button>
           </div>
@@ -415,6 +465,11 @@
       const detailMessageEl = document.querySelector("#detail-message");
       const writeMessageEl = document.querySelector("#write-message");
       const writeOutputEl = document.querySelector("#write-output");
+      const importCollectionEl = document.querySelector("#import-collection");
+      const importJsonEl = document.querySelector("#import-json");
+      const uploadFileEl = document.querySelector("#upload-file");
+      const importMessageEl = document.querySelector("#import-message");
+      const importResultsEl = document.querySelector("#import-results");
 
       let currentCollection = "books";
       let selectedDocumentId = "";
@@ -426,6 +481,8 @@
       });
       document.querySelector("#refresh-documents").addEventListener("click", loadDocuments);
       document.querySelector("#add-form").addEventListener("submit", addDocument);
+      document.querySelector("#import-json-form").addEventListener("submit", importJsonDocuments);
+      document.querySelector("#upload-form").addEventListener("submit", uploadDocuments);
       updateDocumentEl.addEventListener("click", updateSelectedDocument);
       deleteDocumentEl.addEventListener("click", deleteSelectedDocument);
 
@@ -512,11 +569,90 @@
           writeOutputEl.textContent = JSON.stringify(payload, null, 2);
           currentCollection = collection;
           collectionInputEl.value = collection;
+          importCollectionEl.value = collection;
           await loadCollections();
           await loadDocuments();
         } catch (error) {
           showMessage(writeMessageEl, error.message, true);
         }
+      }
+
+      async function importJsonDocuments(event) {
+        event.preventDefault();
+        hideMessage(importMessageEl);
+        importResultsEl.hidden = true;
+        importResultsEl.innerHTML = "";
+
+        const collection = clean(importCollectionEl.value);
+        if (!collection) {
+          showMessage(importMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        try {
+          const documents = JSON.parse(importJsonEl.value);
+          const response = await fetch(
+            `/collections/${encodeURIComponent(collection)}/documents/import`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(documents),
+            }
+          );
+          const payload = await readJson(response);
+          await finishImport(collection, payload);
+        } catch (error) {
+          showMessage(importMessageEl, error.message, true);
+        }
+      }
+
+      async function uploadDocuments(event) {
+        event.preventDefault();
+        hideMessage(importMessageEl);
+        importResultsEl.hidden = true;
+        importResultsEl.innerHTML = "";
+
+        const collection = clean(importCollectionEl.value);
+        if (!collection) {
+          showMessage(importMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        const file = uploadFileEl.files[0];
+        if (!file) {
+          showMessage(importMessageEl, "Choose a file first.", true);
+          return;
+        }
+
+        const form = new FormData();
+        form.append("file", file);
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(collection)}/documents/upload`,
+            {
+              method: "POST",
+              body: form,
+            }
+          );
+          const payload = await readJson(response);
+          await finishImport(collection, payload);
+        } catch (error) {
+          showMessage(importMessageEl, error.message, true);
+        }
+      }
+
+      async function finishImport(collection, payload) {
+        currentCollection = collection;
+        collectionInputEl.value = collection;
+        importCollectionEl.value = collection;
+        renderImportResults(payload);
+        showMessage(
+          importMessageEl,
+          `Imported ${payload.succeeded} of ${payload.total} documents.`
+        );
+        await loadCollections();
+        await loadDocuments();
       }
 
       async function selectCollection(collection) {
@@ -527,6 +663,7 @@
 
         currentCollection = collection;
         collectionInputEl.value = collection;
+        importCollectionEl.value = collection;
         renderActiveCollection();
         await loadDocuments();
       }
@@ -676,6 +813,33 @@
           documentsEl.appendChild(button);
         });
         renderActiveDocument();
+      }
+
+      function renderImportResults(payload) {
+        const rows = payload.results || [];
+        importResultsEl.hidden = false;
+        importResultsEl.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>OK</th>
+                <th>Shard</th>
+                <th>Warnings</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((result) => `
+                <tr>
+                  <td>${escapeHtml(result.id || "")}</td>
+                  <td>${result.ok ? "yes" : "no"}</td>
+                  <td>${escapeHtml(result.shard_id ?? "")}</td>
+                  <td>${escapeHtml((result.warnings || [result.error || ""]).join("; "))}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
       }
 
       function renderActiveCollection() {

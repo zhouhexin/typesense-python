@@ -56,6 +56,50 @@ class Coordinator:
             "warnings": warnings,
         }
 
+    async def import_documents(
+        self,
+        collection: str,
+        documents: list[Document],
+    ) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+        succeeded = 0
+
+        for document in documents:
+            document_id = document.get("id")
+            try:
+                result = await self.add_document(collection, document)
+            except (ValueError, httpx.HTTPError) as error:
+                results.append(
+                    {
+                        "id": document_id if isinstance(document_id, str) else None,
+                        "ok": False,
+                        "error": str(error),
+                        "warnings": [],
+                    }
+                )
+                continue
+
+            succeeded += 1
+            results.append(
+                {
+                    "id": result["id"],
+                    "ok": True,
+                    "shard_id": result["shard_id"],
+                    "primary": result["primary"],
+                    "replicas": result["replicas"],
+                    "warnings": result["warnings"],
+                }
+            )
+
+        failed = len(documents) - succeeded
+        return {
+            "ok": failed == 0,
+            "total": len(documents),
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+
     async def list_collections(self) -> dict[str, list[str]]:
         collections: set[str] = set()
         for node in self.cluster.nodes.values():

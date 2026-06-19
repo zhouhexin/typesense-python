@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any, Union
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 
 from .cluster import ClusterMap
 from .coordinator import Coordinator
+from .importer import parse_upload
 from .node import SearchNode
 from .schemas import Document
 
@@ -19,6 +20,7 @@ ClusterInput = Union[dict[str, Any], str, Path, ClusterMap]
 WEB_DIR = Path(__file__).parent / "web"
 SEARCH_HTML = WEB_DIR / "search.html"
 ADMIN_HTML = WEB_DIR / "admin.html"
+UPLOAD_FILE = File(...)
 
 
 def create_app(
@@ -168,6 +170,25 @@ def create_app(
                 return await coordinator.add_document(collection, document)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+
+        @app.post("/collections/{collection}/documents/import")
+        async def import_documents(
+            collection: str,
+            documents: list[Document],
+        ) -> dict[str, Any]:
+            return await coordinator.import_documents(collection, documents)
+
+        @app.post("/collections/{collection}/documents/upload")
+        async def upload_documents(
+            collection: str,
+            file: UploadFile = UPLOAD_FILE,
+        ) -> dict[str, Any]:
+            try:
+                content = await file.read()
+                documents = parse_upload(file.filename or "upload", content)
+            except (UnicodeDecodeError, ValueError) as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            return await coordinator.import_documents(collection, documents)
 
         @app.get("/collections/{collection}/documents")
         async def list_documents(collection: str) -> dict[str, list[Document]]:
