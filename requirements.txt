@@ -9,7 +9,7 @@ anyio==4.12.1
     #   starlette
 certifi==2025.4.26
     # via httpx
-click==8.1.8
+click==8.4.1
     # via uvicorn
 exceptiongroup==1.3.1
     # via
