@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+
+from docx import Document as DocxDocument
+from pypdf import PdfReader
 
 Document = dict[str, Any]
 
@@ -14,10 +18,10 @@ def parse_upload(filename: str, content: bytes) -> list[Document]:
     """Parse an uploaded file into one or more documents."""
 
     suffix = Path(filename).suffix.lower()
-    text = content.decode("utf-8")
     slug = _slugify(filename)
 
     if suffix in {".txt", ".md"}:
+        text = content.decode("utf-8")
         return [
             {
                 "id": slug,
@@ -28,10 +32,18 @@ def parse_upload(filename: str, content: bytes) -> list[Document]:
         ]
 
     if suffix == ".json":
+        text = content.decode("utf-8")
         return _parse_json(filename, text, slug)
 
     if suffix == ".jsonl":
+        text = content.decode("utf-8")
         return _parse_jsonl(filename, text, slug)
+
+    if suffix == ".docx":
+        return [_document_from_text(filename, slug, _extract_docx(filename, content))]
+
+    if suffix == ".pdf":
+        return [_document_from_text(filename, slug, _extract_pdf(filename, content))]
 
     raise ValueError(f"unsupported upload type for {filename}")
 
@@ -71,6 +83,40 @@ def _parse_jsonl(filename: str, text: str, slug: str) -> list[Document]:
             raise ValueError(f"{filename} line {line_number} must be a JSON object")
         documents.append(_with_generated_id(payload, f"{slug}-{line_number}"))
     return documents
+
+
+def _extract_docx(filename: str, content: bytes) -> str:
+    try:
+        document = DocxDocument(BytesIO(content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    except Exception as error:
+        raise ValueError(f"could not parse {filename}: {error}") from error
+    return _require_text(filename, text)
+
+
+def _extract_pdf(filename: str, content: bytes) -> str:
+    try:
+        reader = PdfReader(BytesIO(content))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as error:
+        raise ValueError(f"could not parse {filename}: {error}") from error
+    return _require_text(filename, text)
+
+
+def _document_from_text(filename: str, document_id: str, body: str) -> Document:
+    return {
+        "id": document_id,
+        "title": filename,
+        "body": body,
+        "source": filename,
+    }
+
+
+def _require_text(filename: str, text: str) -> str:
+    body = text.strip()
+    if not body:
+        raise ValueError(f"no extractable text found in {filename}")
+    return body
 
 
 def _with_generated_id(document: Document, generated_id: str) -> Document:

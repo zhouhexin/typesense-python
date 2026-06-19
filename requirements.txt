@@ -29,10 +29,16 @@ idna==3.10
     # via
     #   anyio
     #   httpx
+lxml==6.1.1
+    # via python-docx
 pydantic==2.13.4
     # via fastapi
 pydantic-core==2.46.4
     # via pydantic
+pypdf==6.13.3
+    # via typesense (pyproject.toml)
+python-docx==1.2.0
+    # via typesense (pyproject.toml)
 python-multipart==0.0.20
     # via typesense (pyproject.toml)
 starlette==0.49.3

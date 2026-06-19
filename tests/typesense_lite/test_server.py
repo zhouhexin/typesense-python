@@ -1,4 +1,6 @@
 import json
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
 from fastapi.testclient import TestClient
@@ -292,6 +294,52 @@ def test_coordinator_uploads_txt_file_with_single_node(tmp_path) -> None:
     assert documents["notes-txt"]["body"] == "searchable uploaded text"
 
 
+def test_coordinator_uploads_docx_file_with_single_node(tmp_path) -> None:
+    documents: dict[str, dict] = {}
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=mock_single_node_client(documents),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/collections/books/documents/upload",
+        files={
+            "file": (
+                "plan.docx",
+                make_docx("word searchable text"),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["id"] == "plan-docx"
+    assert documents["plan-docx"]["body"] == "word searchable text"
+
+
+def test_coordinator_uploads_pdf_file_with_single_node(tmp_path) -> None:
+    documents: dict[str, dict] = {}
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=mock_single_node_client(documents),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/collections/books/documents/upload",
+        files={"file": ("report.pdf", make_pdf("pdf searchable text"), "application/pdf")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["id"] == "report-pdf"
+    assert documents["report-pdf"]["body"] == "pdf searchable text"
+
+
 def test_coordinator_upload_rejects_unsupported_file_type(tmp_path) -> None:
     app = create_app(
         role="coordinator",
@@ -346,6 +394,7 @@ def test_coordinator_serves_admin_page() -> None:
     assert "Collections" in response.text
     assert "Documents" in response.text
     assert 'type="file"' in response.text
+    assert ".pdf,.docx" in response.text
     assert "fetch('/cluster')" in response.text
     assert "fetch('/collections')" in response.text
     assert "/documents/import" in response.text
@@ -371,3 +420,75 @@ def test_data_node_does_not_serve_web_pages() -> None:
     assert client.get("/").status_code == 404
     assert client.get("/search").status_code == 404
     assert client.get("/admin").status_code == 404
+
+
+def make_docx(*paragraphs: str) -> bytes:
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(
+            f"<w:p><w:r><w:t>{paragraph}</w:t></w:r></w:p>"
+            for paragraph in paragraphs
+        )
+        + "</w:body></w:document>"
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    relationships = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+        'Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", relationships)
+        archive.writestr("word/document.xml", document_xml)
+    return output.getvalue()
+
+
+def make_pdf(text: str) -> bytes:
+    stream = f"BT /F1 24 Tf 72 720 Td ({text}) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
+        b"/MediaBox [0 0 612 792] /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        f"<< /Length {len(stream)} >>\nstream\n{stream}\nendstream".encode(),
+    ]
+    pdf = BytesIO()
+    pdf.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(pdf.tell())
+        pdf.write(f"{index} 0 obj\n".encode())
+        pdf.write(obj)
+        pdf.write(b"\nendobj\n")
+    xref_offset = pdf.tell()
+    pdf.write(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.write(f"{offset:010d} 00000 n \n".encode())
+    pdf.write(
+        (
+            "trailer\n"
+            f"<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            "startxref\n"
+            f"{xref_offset}\n"
+            "%%EOF\n"
+        ).encode()
+    )
+    return pdf.getvalue()
