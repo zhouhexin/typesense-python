@@ -63,8 +63,15 @@ def create_app(
             if node_id == placement.primary or node_id in placement.replicas
         }
 
+        @app.on_event("startup")
+        async def start_raft_runtimes() -> None:
+            for runtime in raft_runtimes.values():
+                runtime.start()
+
         @app.on_event("shutdown")
         async def close_raft_client() -> None:
+            for runtime in raft_runtimes.values():
+                await runtime.stop()
             await raft_client.aclose()
 
         @app.get("/health")

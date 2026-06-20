@@ -1603,7 +1603,7 @@ git commit -m "feat: show raft state in cluster console"
 **文件：**
 - 新增：`tests/typesense_lite/test_raft_integration.py`
 
-- [ ] **Step 1：写集成测试**
+- [x] **Step 1：写集成测试**
 
 创建 `tests/typesense_lite/test_raft_integration.py`，用 `httpx.MockTransport` 或 in-process runtime 模拟三节点：
 
@@ -1623,7 +1623,7 @@ async def test_new_leader_elected_after_leader_stops(tmp_path) -> None:
 - term 增加。
 - majority 成立。
 
-- [ ] **Step 2：运行测试确认失败**
+- [x] **Step 2：运行测试确认失败**
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_raft_integration.py -q
@@ -1631,11 +1631,11 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_raft_integra
 
 预期：根据当前 runtime 能力缺失失败。
 
-- [ ] **Step 3：补齐 timeout / tick 控制接口**
+- [x] **Step 3：补齐 timeout / tick 控制接口**
 
 在 `RaftRuntime` 增加测试友好的 `tick()` 或显式 `start_election()` 控制，避免测试依赖真实睡眠。
 
-- [ ] **Step 4：运行测试确认通过**
+- [x] **Step 4：运行测试确认通过**
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_raft_integration.py -q
@@ -1643,7 +1643,7 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_raft_integra
 
 预期：通过。
 
-- [ ] **Step 5：提交**
+- [x] **Step 5：提交**
 
 ```bash
 git add src/typesense_lite/raft_runtime.py tests/typesense_lite/test_raft_integration.py
@@ -1656,7 +1656,7 @@ git commit -m "test: cover raft leader failover"
 - 修改：`README.md` 或现有启动文档
 - 修改：`docs/superpowers/plans/2026-06-20-typesense-lite-raft-election.md`
 
-- [ ] **Step 1：运行完整测试**
+- [x] **Step 1：运行完整测试**
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite -q
@@ -1664,7 +1664,7 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite -q
 
 预期：全部通过。
 
-- [ ] **Step 2：运行 lint**
+- [x] **Step 2：运行 lint**
 
 ```bash
 .venv/bin/python -m ruff check src/typesense_lite tests/typesense_lite examples/distributed_lite
@@ -1672,7 +1672,7 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite -q
 
 预期：`All checks passed!`
 
-- [ ] **Step 3：手工启动集群**
+- [x] **Step 3：手工启动集群**
 
 ```bash
 .venv/bin/python examples/distributed_lite/start_cluster.py
@@ -1687,7 +1687,7 @@ node-2: http://127.0.0.1:9102
 node-3: http://127.0.0.1:9103
 ```
 
-- [ ] **Step 4：手工验证 Raft 状态接口**
+- [x] **Step 4：手工验证 Raft 状态接口**
 
 ```bash
 curl http://127.0.0.1:9100/cluster/raft
@@ -1695,7 +1695,7 @@ curl http://127.0.0.1:9100/cluster/raft
 
 预期：每个 shard 都有 leader 和 member role。
 
-- [ ] **Step 5：手工验证页面**
+- [x] **Step 5：手工验证页面**
 
 打开：
 
@@ -1709,7 +1709,7 @@ http://127.0.0.1:9100/cluster-console
 - 每个 shard 有 leader。
 - 每个 member 有 role、term、commit index。
 
-- [ ] **Step 6：提交文档**
+- [x] **Step 6：提交文档**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-06-20-typesense-lite-raft-election.md
@@ -1720,16 +1720,24 @@ git commit -m "docs: document raft election workflow"
 
 ## 总体验收标准
 
-- [ ] data node 暴露 RequestVote、AppendEntries、Raft state API。
-- [ ] 每个 shard 独立选出 leader。
-- [ ] leader 停止后 follower 能成为新 leader。
-- [ ] coordinator 写入通过 shard leader。
-- [ ] Raft log 达到多数派后才提交。
-- [ ] 已提交 command 应用到 document store 和 index。
-- [ ] `/cluster/raft` 能展示每个 shard 的 leader、term、member role。
-- [ ] `/cluster-console` 展示真实 Raft 状态，不再显示静态选举占位。
-- [ ] 完整测试通过。
-- [ ] ruff 检查通过。
+- [x] data node 暴露 RequestVote、AppendEntries、Raft state API。
+- [x] 每个 shard 独立选出 leader。
+- [x] leader 停止后 follower 能成为新 leader。
+- [x] coordinator 写入通过 shard leader。
+- [x] Raft log 达到多数派后才提交。
+- [x] 已提交 command 应用到 document store 和 index。
+- [x] `/cluster/raft` 能展示每个 shard 的 leader、term、member role。
+- [x] `/cluster-console` 展示真实 Raft 状态，不再显示静态选举占位。
+- [x] 完整测试通过。
+- [x] ruff 检查通过。
+
+## 实际验收记录
+
+- `tests/typesense_lite/test_raft_integration.py` 覆盖三 voter Raft group 中旧 leader 停止后，新 leader 以更高 term 获得多数派选票。
+- `tests/typesense_lite/test_raft_runtime.py` 覆盖后台选举/心跳、leader 写入多数派提交、follower 应用已提交日志、heartbeat 推进 commit 后补应用日志。
+- 端到端手工验证使用临时 data dir 启动 `examples/distributed_lite/start_cluster.py`，确认 `/cluster/raft` 返回每个 shard 的 leader/member role。
+- 写入 `raft-test-1` 后，搜索命中正常，并直接访问 shard 0 follower `node-2` 验证文档已复制并应用；`/cluster/raft` 中 shard 0 leader 和 follower 的 `commit_index`、`last_applied` 都为 `1`。
+- 默认 `examples/distributed_lite/cluster_config.json` 每个 shard 仍是 2 voter，只能验证复制和多数派提交；真正容忍 1 个 voter 故障需要每个 shard 配置至少 3 voter。
 
 ## 风险和约束
 
@@ -1737,4 +1745,3 @@ git commit -m "docs: document raft election workflow"
 - 第一版不做 snapshot/log compaction，长时间大量写入后 `log.jsonl` 会增长。
 - 第一版不做 membership change。
 - 第一版只有单 coordinator；coordinator 本身不是 Raft 复制对象。
-

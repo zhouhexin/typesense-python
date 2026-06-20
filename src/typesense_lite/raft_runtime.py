@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -26,6 +29,8 @@ class RaftRuntime:
         peer_urls: dict[str, str],
         client: httpx.AsyncClient,
         apply_command: Callable[[dict[str, Any]], dict[str, Any]],
+        election_timeout: float | None = None,
+        heartbeat_interval: float = 0.2,
     ) -> None:
         self.node_id = node_id
         self.shard_id = shard_id
@@ -33,6 +38,13 @@ class RaftRuntime:
         self.peer_urls = peer_urls
         self.client = client
         self.apply_command = apply_command
+        member_index = members.index(node_id) if node_id in members else len(members)
+        self.election_timeout = (
+            election_timeout if election_timeout is not None else 0.5 + member_index * 0.3
+        )
+        self.heartbeat_interval = heartbeat_interval
+        self.last_heartbeat_at = time.monotonic()
+        self._tasks: list[asyncio.Task[None]] = []
         self.storage = RaftStorage(data_dir, node_id=node_id, shard_id=shard_id)
         self.core = RaftCore(
             node_id=node_id,
@@ -40,6 +52,22 @@ class RaftRuntime:
             state=self.storage.load_state(),
             log=self.storage.load_log(),
         )
+
+    def start(self) -> None:
+        if self._tasks:
+            return
+        self._tasks = [
+            asyncio.create_task(self._run_election_loop()),
+            asyncio.create_task(self._run_heartbeat_loop()),
+        ]
+
+    async def stop(self) -> None:
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._tasks = []
 
     def state(self) -> dict[str, Any]:
         return {
@@ -83,8 +111,11 @@ class RaftRuntime:
             entries=entries,
             leader_commit=int(payload["leader_commit"]),
         )
-        self.storage.save_state(self.core.state)
         self.storage.replace_log(self.core.log)
+        if result.get("success") is True:
+            self.last_heartbeat_at = time.monotonic()
+            self._apply_committed_entries()
+        self.storage.save_state(self.core.state)
         return result
 
     async def start_election(self) -> None:
@@ -236,3 +267,25 @@ class RaftRuntime:
             if entry.index == index:
                 return entry.term
         return 0
+
+    def _apply_committed_entries(self) -> None:
+        for entry in sorted(self.core.log, key=lambda item: item.index):
+            if entry.index <= self.core.state.last_applied:
+                continue
+            if entry.index > self.core.state.commit_index:
+                break
+            self.apply_command(entry.command)
+            self.core.state.last_applied = entry.index
+
+    async def _run_election_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.election_timeout)
+            if self.core.role is RaftRole.LEADER:
+                continue
+            if time.monotonic() - self.last_heartbeat_at >= self.election_timeout:
+                await self.start_election()
+
+    async def _run_heartbeat_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self.heartbeat_interval)
+            await self.send_heartbeat()

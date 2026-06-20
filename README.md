@@ -16,6 +16,47 @@ You can find some examples [here](https://github.com/typesense/typesense-python/
 
 See detailed [API documentation](https://typesense.org/api).
 
+## Typesense Lite 本地分布式搜索 Demo
+
+本仓库现在包含一个轻量的本地分布式搜索服务，代码位于
+`src/typesense_lite`，默认用单机多进程、多端口模拟一个 coordinator
+和多个 data node。
+
+启动默认集群：
+
+```bash
+.venv/bin/python examples/distributed_lite/start_cluster.py
+```
+
+默认端口：
+
+- coordinator: `http://127.0.0.1:9100`
+- data node: `http://127.0.0.1:9101`、`9102`、`9103`
+
+前端入口：
+
+- 搜索页：`http://127.0.0.1:9100/`
+- 管理后台：`http://127.0.0.1:9100/admin`
+- 集群控制台：`http://127.0.0.1:9100/cluster-console`
+
+常用接口：
+
+```bash
+curl http://127.0.0.1:9100/cluster/health
+curl http://127.0.0.1:9100/cluster/raft
+curl -X POST http://127.0.0.1:9100/collections/books/documents \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"book-1","title":"Raft Test","body":"hello raft"}'
+curl 'http://127.0.0.1:9100/collections/books/documents/search?q=raft'
+```
+
+当前 Raft 实现是 per-shard Raft group：每个 shard 独立选 leader，
+coordinator 写入时先发现 shard leader，再把写入提交到
+`/internal/raft/{shard_id}/commands`。默认配置中每个 shard 是 2 个
+voter，这能验证 leader 选举、心跳、日志复制和多数派提交；但 2 voter
+Raft group 在任意 1 个 voter 不可用时无法形成多数派，因此真实故障转移
+需要使用每个 shard 至少 3 个 voter 的配置。
+
 ## Async usage
 
 Use `AsyncClient` when working in an async runtime:
