@@ -209,6 +209,10 @@ def create_app(
         async def cluster_health() -> dict[str, Any]:
             return await coordinator.cluster_health()
 
+        @app.get("/cluster/raft")
+        async def cluster_raft() -> dict[str, Any]:
+            return await coordinator.raft_status()
+
         @app.get("/cluster")
         def get_cluster() -> dict[str, Any]:
             return {

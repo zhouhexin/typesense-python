@@ -555,11 +555,15 @@ def test_coordinator_serves_cluster_console_page() -> None:
     assert "Typesense Lite Cluster Console" in response.text
     assert "Cluster Health" in response.text
     assert "Election Status" in response.text
+    assert "Raft Status" in response.text
     assert "Consistency & Repair" in response.text
     assert "fetch('/cluster')" in response.text
     assert "fetch('/cluster/health')" in response.text
+    assert "fetch('/cluster/raft')" in response.text
     assert "/consistency" in response.text
     assert "/repair" in response.text
+    assert "commit_index" in response.text
+    assert "last_applied" in response.text
     assert "static primary mode" in response.text
     assert 'id="check-consistency"' in response.text
     assert 'id="repair-collection"' in response.text
@@ -686,6 +690,35 @@ async def test_coordinator_cluster_health_endpoint(tmp_path) -> None:
 
     # Shard should be healthy
     assert payload["shards"]["0"]["status"] == "healthy"
+
+
+def test_coordinator_cluster_raft_endpoint(tmp_path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "node": "node-1",
+                "shard_id": 0,
+                "role": "leader",
+                "current_term": 2,
+                "commit_index": 4,
+                "last_applied": 4,
+                "leader_id": "node-1",
+            },
+        )
+
+    app = create_app(
+        role="coordinator",
+        cluster_config=CONFIG,
+        data_dir=tmp_path,
+        coordinator_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = TestClient(app)
+
+    response = client.get("/cluster/raft")
+
+    assert response.status_code == 200
+    assert response.json()["shards"]["0"]["members"]["node-1"]["role"] == "leader"
 
 
 def test_coordinator_consistency_endpoint_reports_replica_drift(tmp_path) -> None:

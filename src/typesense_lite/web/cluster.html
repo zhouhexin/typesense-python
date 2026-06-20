@@ -376,6 +376,15 @@
 
         <section class="panel">
           <div class="section-head">
+            <h2>Raft Status</h2>
+            <button class="secondary" id="refresh-raft" type="button">Refresh</button>
+          </div>
+          <div id="raft-status" class="grid"></div>
+          <div id="raft-message" class="message" hidden></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
             <h2>Consistency & Repair</h2>
           </div>
           <div class="toolbar">
@@ -401,6 +410,8 @@
       const nodesEl = document.querySelector("#nodes");
       const shardsEl = document.querySelector("#shards");
       const electionStatusEl = document.querySelector("#election-status");
+      const raftStatusEl = document.querySelector("#raft-status");
+      const raftMessageEl = document.querySelector("#raft-message");
       const collectionInputEl = document.querySelector("#collection-input");
       const repairMessageEl = document.querySelector("#repair-message");
       const consistencyResultsEl = document.querySelector("#consistency-results");
@@ -410,6 +421,7 @@
 
       document.querySelector("#refresh-cluster").addEventListener("click", loadCluster);
       document.querySelector("#refresh-health").addEventListener("click", loadHealth);
+      document.querySelector("#refresh-raft").addEventListener("click", loadRaft);
       document.querySelector("#check-consistency").addEventListener("click", () => {
         checkConsistency();
       });
@@ -417,6 +429,7 @@
 
       loadCluster();
       loadHealth();
+      loadRaft();
 
       async function loadCluster() {
         hideMessage(clusterMessageEl);
@@ -438,6 +451,18 @@
         } catch (error) {
           nodesEl.innerHTML = "";
           showMessage(healthMessageEl, error.message, true);
+        }
+      }
+
+      async function loadRaft() {
+        hideMessage(raftMessageEl);
+        try {
+          const response = await fetch('/cluster/raft');
+          const raft = await readJson(response);
+          renderRaftStatus(raft);
+        } catch (error) {
+          raftStatusEl.innerHTML = "";
+          showMessage(raftMessageEl, error.message, true);
         }
       }
 
@@ -589,6 +614,52 @@
             </div>
           </div>
         `).join("");
+      }
+
+      function renderRaftStatus(raft) {
+        const shardEntries = Object.entries(raft.shards || {});
+        if (!shardEntries.length) {
+          raftStatusEl.innerHTML = '<div class="message">No Raft groups found.</div>';
+          return;
+        }
+
+        raftStatusEl.innerHTML = shardEntries.map(([shardId, shardInfo]) => {
+          const memberRows = Object.entries(shardInfo.members || {}).map(([nodeId, member]) => `
+            <tr>
+              <td>${escapeHtml(nodeId)}</td>
+              <td>${escapeHtml(member.role || "unknown")}</td>
+              <td>${escapeHtml(member.term ?? "")}</td>
+              <td>${escapeHtml(member.commit_index ?? "")}</td>
+              <td>${escapeHtml(member.last_applied ?? "")}</td>
+            </tr>
+          `).join("");
+          return `
+            <div class="shard">
+              <div class="row">
+                <h3>Shard ${escapeHtml(shardId)}</h3>
+                <span class="badge ${shardInfo.leader ? "status-healthy" : "status-unavailable"}">
+                  ${escapeHtml(shardInfo.leader || "no leader")}
+                </span>
+              </div>
+              <div class="meta">
+                Leader: ${escapeHtml(shardInfo.leader || "none")}<br />
+                Term: ${escapeHtml(shardInfo.term ?? "")}
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Node</th>
+                    <th>Role</th>
+                    <th>Term</th>
+                    <th>commit_index</th>
+                    <th>last_applied</th>
+                  </tr>
+                </thead>
+                <tbody>${memberRows}</tbody>
+              </table>
+            </div>
+          `;
+        }).join("");
       }
 
       function renderConsistencyResults(payload) {

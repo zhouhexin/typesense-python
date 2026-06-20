@@ -317,6 +317,52 @@ class Coordinator:
         report = await collect_cluster_health(self.cluster, self._client)
         return report.to_dict()
 
+    async def raft_status(self) -> dict[str, Any]:
+        shards: dict[str, Any] = {}
+        for shard_id in range(self.cluster.shard_count):
+            members: dict[str, Any] = {}
+            leader: str | None = None
+            term = 0
+
+            for node in self.cluster.get_shard_voters(shard_id):
+                try:
+                    response = await self._client.get(
+                        f"{node.url}/internal/raft/{shard_id}/state"
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPError as error:
+                    members[node.id] = {
+                        "role": "unavailable",
+                        "term": None,
+                        "commit_index": None,
+                        "last_applied": None,
+                        "error": str(error),
+                    }
+                    continue
+
+                payload = response.json()
+                role = payload.get("role")
+                node_term = int(payload.get("current_term", 0))
+                if node_term > term:
+                    term = node_term
+                if role == "leader":
+                    leader = node.id
+                members[node.id] = {
+                    "role": role,
+                    "term": node_term,
+                    "commit_index": payload.get("commit_index"),
+                    "last_applied": payload.get("last_applied"),
+                    "leader_id": payload.get("leader_id"),
+                }
+
+            shards[str(shard_id)] = {
+                "leader": leader,
+                "term": term,
+                "members": members,
+            }
+
+        return {"shards": shards}
+
     async def check_consistency(self, collection: str) -> dict[str, Any]:
         """Check consistency between primary and replicas for a collection."""
         return await _check_consistency(self.cluster, collection, self._client)
