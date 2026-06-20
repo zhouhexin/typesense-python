@@ -98,3 +98,22 @@ def test_node_lists_collections(tmp_path) -> None:
     node.add_document(1, "books", {"id": "doc-3", "title": "Another book"})
 
     assert node.list_collections() == ["books", "movies"]
+
+
+def test_node_lists_document_ids(tmp_path) -> None:
+    node = SearchNode(node_id="node-1", data_dir=tmp_path)
+    node.add_document(0, "books", {"id": "doc-3", "title": "Third"})
+    node.add_document(0, "books", {"id": "doc-1", "title": "First"})
+    node.add_document(0, "books", {"id": "doc-2", "title": "Second"})
+
+    ids = node.list_document_ids(0, "books")
+
+    assert ids == ["doc-1", "doc-2", "doc-3"]
+
+
+def test_node_lists_document_ids_empty_collection(tmp_path) -> None:
+    node = SearchNode(node_id="node-1", data_dir=tmp_path)
+
+    ids = node.list_document_ids(0, "books")
+
+    assert ids == []

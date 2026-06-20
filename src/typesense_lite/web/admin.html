@@ -431,6 +431,19 @@
           <div id="collections" class="collection-list"></div>
           <div id="collection-message" class="message" hidden></div>
         </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Consistency & Repair</h2>
+          </div>
+          <div class="actions">
+            <button id="check-consistency" type="button">Check Consistency</button>
+            <button class="secondary" id="repair-collection" type="button">Repair</button>
+          </div>
+          <div id="consistency-message" class="message" hidden></div>
+          <div id="consistency-results"></div>
+          <div id="repair-results"></div>
+        </section>
       </div>
 
       <div class="stack">
@@ -541,6 +554,9 @@
       const healthNodesEl = document.querySelector("#health-nodes");
       const healthShardsEl = document.querySelector("#health-shards");
       const healthMessageEl = document.querySelector("#health-message");
+      const consistencyMessageEl = document.querySelector("#consistency-message");
+      const consistencyResultsEl = document.querySelector("#consistency-results");
+      const repairResultsEl = document.querySelector("#repair-results");
 
       let currentCollection = "books";
       let selectedDocumentId = "";
@@ -555,6 +571,8 @@
       document.querySelector("#add-form").addEventListener("submit", addDocument);
       document.querySelector("#import-json-form").addEventListener("submit", importJsonDocuments);
       document.querySelector("#upload-form").addEventListener("submit", uploadDocuments);
+      document.querySelector("#check-consistency").addEventListener("click", checkConsistency);
+      document.querySelector("#repair-collection").addEventListener("click", repairCollection);
       updateDocumentEl.addEventListener("click", updateSelectedDocument);
       deleteDocumentEl.addEventListener("click", deleteSelectedDocument);
 
@@ -813,6 +831,50 @@
         }
       }
 
+      async function checkConsistency() {
+        hideMessage(consistencyMessageEl);
+        consistencyResultsEl.innerHTML = "";
+
+        if (!currentCollection) {
+          showMessage(consistencyMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(currentCollection)}/consistency`
+          );
+          const payload = await readJson(response);
+          renderConsistencyResults(payload);
+          showMessage(consistencyMessageEl, `Checked ${payload.collection}.`);
+        } catch (error) {
+          showMessage(consistencyMessageEl, error.message, true);
+        }
+      }
+
+      async function repairCollection() {
+        hideMessage(consistencyMessageEl);
+        repairResultsEl.innerHTML = "";
+
+        if (!currentCollection) {
+          showMessage(consistencyMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(currentCollection)}/repair`,
+            { method: "POST" }
+          );
+          const payload = await readJson(response);
+          renderRepairResults(payload);
+          showMessage(consistencyMessageEl, `Repair attempted for ${payload.collection}.`);
+          await checkConsistency();
+        } catch (error) {
+          showMessage(consistencyMessageEl, error.message, true);
+        }
+      }
+
       function renderCluster(cluster) {
         const nodes = new Map(cluster.nodes.map((node) => [node.id, node]));
         clusterEl.innerHTML = "";
@@ -975,6 +1037,98 @@
                   <td>${result.ok ? "yes" : "no"}</td>
                   <td>${escapeHtml(result.shard_id ?? "")}</td>
                   <td>${escapeHtml((result.warnings || [result.error || ""]).join("; "))}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function renderConsistencyResults(payload) {
+        const rows = [];
+        Object.entries(payload.shards || {}).forEach(([shardId, shardInfo]) => {
+          Object.entries(shardInfo.replicas || {}).forEach(([replicaId, replicaInfo]) => {
+            rows.push({
+              shardId,
+              replicaId,
+              missing_on_replica: replicaInfo.missing_on_replica || [],
+              extra_on_replica: replicaInfo.extra_on_replica || [],
+              error: replicaInfo.error || "",
+            });
+          });
+        });
+
+        if (!rows.length) {
+          consistencyResultsEl.innerHTML = '<div class="message">No replica drift found.</div>';
+          return;
+        }
+
+        consistencyResultsEl.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Shard</th>
+                <th>Replica</th>
+                <th>missing_on_replica</th>
+                <th>extra_on_replica</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.shardId)}</td>
+                  <td>${escapeHtml(row.replicaId)}</td>
+                  <td>${escapeHtml(row.missing_on_replica.join(", ") || "none")}</td>
+                  <td>${escapeHtml(row.extra_on_replica.join(", ") || "none")}</td>
+                  <td>${escapeHtml(row.error || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function renderRepairResults(payload) {
+        const rows = [];
+        Object.entries(payload.shards || {}).forEach(([shardId, shardInfo]) => {
+          Object.entries(shardInfo.repaired || {}).forEach(([replicaId, ids]) => {
+            rows.push({ shardId, replicaId, repaired: ids, failed: [] });
+          });
+          Object.entries(shardInfo.failed || {}).forEach(([replicaId, ids]) => {
+            const existing = rows.find(
+              (row) => row.shardId === shardId && row.replicaId === replicaId
+            );
+            if (existing) {
+              existing.failed = ids;
+            } else {
+              rows.push({ shardId, replicaId, repaired: [], failed: ids });
+            }
+          });
+        });
+
+        if (!rows.length) {
+          repairResultsEl.innerHTML = '<div class="message">No documents repaired.</div>';
+          return;
+        }
+
+        repairResultsEl.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Shard</th>
+                <th>Replica</th>
+                <th>repaired</th>
+                <th>failed</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.shardId)}</td>
+                  <td>${escapeHtml(row.replicaId)}</td>
+                  <td>${escapeHtml(row.repaired.join(", ") || "none")}</td>
+                  <td>${escapeHtml(row.failed.join(", ") || "none")}</td>
                 </tr>
               `).join("")}
             </tbody>

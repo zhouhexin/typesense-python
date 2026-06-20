@@ -8,6 +8,7 @@ import httpx
 
 from .cluster import ClusterMap
 from .health import collect_cluster_health
+from .repair import check_consistency as _check_consistency, repair_collection as _repair_collection
 from .schemas import Document, NodeInfo, SearchHit
 
 
@@ -318,3 +319,11 @@ class Coordinator:
         """Collect health status from all nodes in the cluster."""
         report = await collect_cluster_health(self.cluster, self._client)
         return report.to_dict()
+
+    async def check_consistency(self, collection: str) -> dict[str, Any]:
+        """Check consistency between primary and replicas for a collection."""
+        return await _check_consistency(self.cluster, collection, self._client)
+
+    async def repair_collection(self, collection: str) -> dict[str, Any]:
+        """Repair replica consistency by copying missing documents from primary."""
+        return await _repair_collection(self.cluster, collection, self._client)

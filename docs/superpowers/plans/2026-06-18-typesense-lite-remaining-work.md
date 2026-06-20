@@ -512,7 +512,8 @@ POST /collections/{collection}/repair
   "repaired": 1,
   "shards": {
     "0": {
-      "node-2": {"repaired": ["book-1"], "failed": []}
+      "repaired": {"node-2": ["book-1"]},
+      "failed": {}
     }
   }
 }
@@ -525,10 +526,10 @@ POST /collections/{collection}/repair
 - 修改：`src/typesense_lite/server.py`
 - 测试：`tests/typesense_lite/test_server.py`
 
-- [ ] 增加测试：`SearchNode.list_document_ids(shard_id, collection)` 返回排序后的 ids。
-- [ ] 增加内部 endpoint：`GET /internal/shards/{shard_id}/collections/{collection}/document_ids`。
-- [ ] 增加测试：endpoint 返回 `{"ids": ["book-1", "book-2"]}`。
-- [ ] 运行 `PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_server.py -q`。
+- [x] 增加测试：`SearchNode.list_document_ids(shard_id, collection)` 返回排序后的 ids。
+- [x] 增加内部 endpoint：`GET /internal/shards/{shard_id}/collections/{collection}/document_ids`。
+- [x] 增加测试：endpoint 返回 `{"ids": ["book-1", "book-2"]}`。
+- [x] 运行 `PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_server.py -q`。
 
 ## 任务 4.2：一致性检查
 
@@ -538,12 +539,12 @@ POST /collections/{collection}/repair
 - 修改：`src/typesense_lite/server.py`
 - 测试：`tests/typesense_lite/test_coordinator.py`
 
-- [ ] 增加测试：primary 有 id、replica 缺 id 时，返回 `missing_on_replica`。
-- [ ] 增加测试：replica 有额外 id 时，返回 `extra_on_replica`。
-- [ ] 增加测试：replica 不可用时，返回该 replica 的 error。
-- [ ] 实现 `check_consistency(collection)`。
-- [ ] 增加 `GET /collections/{collection}/consistency`。
-- [ ] 运行 `PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_coordinator.py -q`。
+- [x] 增加测试：primary 有 id、replica 缺 id 时，返回 `missing_on_replica`。
+- [x] 增加测试：replica 有额外 id 时，返回 `extra_on_replica`。
+- [x] 增加测试：replica 不可用时，返回该 replica 的 error。
+- [x] 实现 `check_consistency(collection)`。
+- [x] 增加 `GET /collections/{collection}/consistency`。
+- [x] 运行 `PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_repair.py tests/typesense_lite/test_server.py -q`。
 
 ## 任务 4.3：手动修复
 
@@ -555,21 +556,21 @@ POST /collections/{collection}/repair
 - 测试：`tests/typesense_lite/test_coordinator.py`
 - 测试：`tests/typesense_lite/test_server.py`
 
-- [ ] 增加测试：repair 会从 primary 读取缺失 document 并写入 replica。
-- [ ] 增加测试：primary 缺失 document 时，该 id 记入 failed。
-- [ ] 增加测试：replica 写入失败时，该 id 记入 failed。
-- [ ] 增加 `POST /collections/{collection}/repair`。
-- [ ] 后台页面增加 Consistency Check 按钮。
-- [ ] 后台页面增加 Repair 按钮。
-- [ ] 后台页面展示 missing/extra/repaired/failed。
-- [ ] 运行 `PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_coordinator.py tests/typesense_lite/test_server.py -q`。
+- [x] 增加测试：repair 会从 primary 读取缺失 document 并写入 replica。
+- [x] 增加测试：primary 缺失 document 时，该 id 记入 failed。
+- [x] 增加测试：replica 写入失败时，该 id 记入 failed。
+- [x] 增加 `POST /collections/{collection}/repair`。
+- [x] 后台页面增加 Consistency Check 按钮。
+- [x] 后台页面增加 Repair 按钮。
+- [x] 后台页面展示 missing/extra/repaired/failed。
+- [x] 运行 `PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite/test_repair.py tests/typesense_lite/test_server.py -q`。
 
 ## 阶段 4 验收标准
 
-- [ ] 可以看到 replica 缺失哪些 document。
-- [ ] 可以手动修复缺失 document。
-- [ ] 修复后再次检查 consistency，missing 列表为空。
-- [ ] replica 不可用时有清晰错误，不导致整个 coordinator 崩溃。
+- [x] 可以看到 replica 缺失哪些 document。
+- [x] 可以手动修复缺失 document。
+- [x] 修复后再次检查 consistency，missing 列表为空。
+- [x] replica 不可用时有清晰错误，不导致整个 coordinator 崩溃。
 
 ---
 
@@ -822,4 +823,3 @@ http://127.0.0.1:9100/admin
 - 是实现全部阶段，还是只实现其中一部分。
 - 第一轮文件上传是否只支持 `.txt/.md/.json/.jsonl`。
 - 是否继续排除自动 primary promotion。
-

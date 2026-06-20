@@ -40,6 +40,10 @@ class InvertedIndex:
     def list_documents(self) -> list[Document]:
         return [self.documents[document_id] for document_id in sorted(self.documents)]
 
+    def list_document_ids(self) -> list[str]:
+        """Return sorted list of document IDs."""
+        return sorted(self.documents.keys())
+
     def delete_document(self, document_id: str) -> Document:
         document = self.documents.pop(document_id)
         self._remove_document_terms(document_id)

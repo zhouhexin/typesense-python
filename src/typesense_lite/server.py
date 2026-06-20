@@ -107,6 +107,10 @@ def create_app(
             except KeyError as error:
                 raise HTTPException(status_code=404, detail="document not found") from error
 
+        @app.get("/internal/shards/{shard_id}/collections/{collection}/document_ids")
+        def list_node_document_ids(shard_id: int, collection: str) -> dict[str, list[str]]:
+            return {"ids": node.list_document_ids(shard_id, collection)}
+
         @app.get("/internal/shards/{shard_id}/collections/{collection}/search")
         def search_node_documents(
             shard_id: int,
@@ -247,6 +251,14 @@ def create_app(
                         detail="document not found",
                     ) from error
                 raise
+
+        @app.get("/collections/{collection}/consistency")
+        async def check_collection_consistency(collection: str) -> dict[str, Any]:
+            return await coordinator.check_consistency(collection)
+
+        @app.post("/collections/{collection}/repair")
+        async def repair_collection_endpoint(collection: str) -> dict[str, Any]:
+            return await coordinator.repair_collection(collection)
 
         return app
 

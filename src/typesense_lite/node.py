@@ -67,6 +67,11 @@ class SearchNode:
         collections.update(collection for _, collection in self._indexes)
         return sorted(collections)
 
+    def list_document_ids(self, shard_id: int, collection: str) -> list[str]:
+        """Return sorted list of document IDs for a collection."""
+        index = self._index_for(shard_id, collection)
+        return index.list_document_ids()
+
     def search(
         self,
         shard_id: int,

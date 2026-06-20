@@ -185,6 +185,29 @@ def test_data_node_internal_lists_collections(tmp_path) -> None:
     assert response.json() == {"collections": ["books"]}
 
 
+def test_data_node_internal_lists_document_ids(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    client = TestClient(app)
+    client.post(
+        "/internal/shards/0/collections/books/documents",
+        json={"id": "doc-3", "title": "Third"},
+    )
+    client.post(
+        "/internal/shards/0/collections/books/documents",
+        json={"id": "doc-1", "title": "First"},
+    )
+
+    response = client.get("/internal/shards/0/collections/books/document_ids")
+
+    assert response.status_code == 200
+    assert response.json() == {"ids": ["doc-1", "doc-3"]}
+
+
 def test_coordinator_public_document_routes_with_single_node(tmp_path) -> None:
     documents: dict[str, dict] = {}
     app = create_app(
@@ -404,6 +427,25 @@ def test_coordinator_serves_admin_page() -> None:
     assert 'method: "DELETE"' in response.text
 
 
+def test_admin_page_includes_consistency_and_repair_controls() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert "Consistency & Repair" in response.text
+    assert 'id="check-consistency"' in response.text
+    assert 'id="repair-collection"' in response.text
+    assert 'id="consistency-results"' in response.text
+    assert "/consistency" in response.text
+    assert "/repair" in response.text
+    assert "missing_on_replica" in response.text
+    assert "extra_on_replica" in response.text
+    assert "repaired" in response.text
+    assert "failed" in response.text
+
+
 def test_admin_page_does_not_shadow_dom_document_when_rendering_documents() -> None:
     app = create_app(role="coordinator", cluster_config=CONFIG)
     client = TestClient(app)
@@ -505,6 +547,111 @@ async def test_coordinator_cluster_health_endpoint(tmp_path) -> None:
 
     # Shard should be healthy
     assert payload["shards"]["0"]["status"] == "healthy"
+
+
+def test_coordinator_consistency_endpoint_reports_replica_drift(tmp_path) -> None:
+    config = {
+        "coordinator": {"host": "127.0.0.1", "port": 9100},
+        "shard_count": 1,
+        "nodes": [
+            {"id": "node-1", "host": "127.0.0.1", "port": 9101},
+            {"id": "node-2", "host": "127.0.0.1", "port": 9102},
+        ],
+        "shards": {
+            "0": {"primary": "node-1", "replicas": ["node-2"]},
+        },
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/document_ids"):
+            if request.url.port == 9101:
+                return httpx.Response(200, json={"ids": ["doc-1", "doc-2"]})
+            return httpx.Response(200, json={"ids": ["doc-1"]})
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        app = create_app(
+            role="coordinator",
+            cluster_config=config,
+            data_dir=tmp_path,
+            coordinator_client=async_client,
+        )
+        client = TestClient(app)
+        response = client.get("/collections/books/consistency")
+    finally:
+        import anyio
+
+        anyio.run(async_client.aclose)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["collection"] == "books"
+    assert payload["shards"]["0"]["replicas"]["node-2"]["missing_on_replica"] == ["doc-2"]
+
+
+def test_coordinator_repair_endpoint_repairs_missing_replica_document(tmp_path) -> None:
+    config = {
+        "coordinator": {"host": "127.0.0.1", "port": 9100},
+        "shard_count": 1,
+        "nodes": [
+            {"id": "node-1", "host": "127.0.0.1", "port": 9101},
+            {"id": "node-2", "host": "127.0.0.1", "port": 9102},
+        ],
+        "shards": {
+            "0": {"primary": "node-1", "replicas": ["node-2"]},
+        },
+    }
+    documents = {
+        9101: {
+            "doc-1": {"id": "doc-1", "title": "First"},
+            "doc-2": {"id": "doc-2", "title": "Second"},
+        },
+        9102: {
+            "doc-1": {"id": "doc-1", "title": "First"},
+        },
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        port = request.url.port
+        path = request.url.path
+
+        if path.endswith("/document_ids"):
+            return httpx.Response(200, json={"ids": sorted(documents.get(port, {}))})
+
+        prefix = "/internal/shards/0/collections/books/documents/"
+        if path.startswith(prefix) and request.method == "GET":
+            document_id = path.removeprefix(prefix)
+            return httpx.Response(200, json=documents[port][document_id])
+
+        if path == "/internal/shards/0/collections/books/documents" and request.method == "POST":
+            document = json.loads(request.content.decode("utf-8"))
+            documents.setdefault(port, {})[document["id"]] = document
+            return httpx.Response(200, json=document)
+
+        raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+    async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        app = create_app(
+            role="coordinator",
+            cluster_config=config,
+            data_dir=tmp_path,
+            coordinator_client=async_client,
+        )
+        client = TestClient(app)
+        response = client.post("/collections/books/repair")
+    finally:
+        import anyio
+
+        anyio.run(async_client.aclose)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repaired"] == 1
+    assert payload["shards"]["0"]["repaired"]["node-2"] == ["doc-2"]
+    assert payload["shards"]["0"]["failed"] == {}
+    assert documents[9102]["doc-2"] == {"id": "doc-2", "title": "Second"}
 
 
 def make_docx(*paragraphs: str) -> bytes:
