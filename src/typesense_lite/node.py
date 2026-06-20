@@ -72,6 +72,28 @@ class SearchNode:
         index = self._index_for(shard_id, collection)
         return index.list_document_ids()
 
+    def apply_raft_command(self, shard_id: int, command: dict[str, Any]) -> Document:
+        command_type = command.get("type")
+        collection = str(command.get("collection") or "")
+
+        if command_type == "add_document":
+            return self.add_document(shard_id, collection, command["document"])
+        if command_type == "update_document":
+            return self.update_document(
+                shard_id,
+                collection,
+                str(command["document_id"]),
+                command["changes"],
+            )
+        if command_type == "delete_document":
+            return self.delete_document(
+                shard_id,
+                collection,
+                str(command["document_id"]),
+            )
+
+        raise ValueError(f"unknown raft command type {command_type!r}")
+
     def search(
         self,
         shard_id: int,

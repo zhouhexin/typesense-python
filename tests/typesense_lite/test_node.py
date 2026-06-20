@@ -117,3 +117,35 @@ def test_node_lists_document_ids_empty_collection(tmp_path) -> None:
     ids = node.list_document_ids(0, "books")
 
     assert ids == []
+
+
+def test_search_node_applies_add_document_raft_command(tmp_path) -> None:
+    node = SearchNode(node_id="node-1", data_dir=tmp_path)
+
+    result = node.apply_raft_command(
+        0,
+        {
+            "type": "add_document",
+            "collection": "books",
+            "document": {"id": "book-1", "title": "Raft"},
+        },
+    )
+
+    assert result["id"] == "book-1"
+    assert node.get_document(0, "books", "book-1")["title"] == "Raft"
+
+
+def test_search_node_applies_delete_document_raft_command(tmp_path) -> None:
+    node = SearchNode(node_id="node-1", data_dir=tmp_path)
+    node.add_document(0, "books", {"id": "book-1", "title": "Raft"})
+
+    result = node.apply_raft_command(
+        0,
+        {
+            "type": "delete_document",
+            "collection": "books",
+            "document_id": "book-1",
+        },
+    )
+
+    assert result["id"] == "book-1"

@@ -149,3 +149,90 @@ class RaftRuntime:
                 )
             except httpx.HTTPError:
                 continue
+
+    async def submit_command(self, command: dict[str, Any]) -> dict[str, Any]:
+        if self.core.role is not RaftRole.LEADER:
+            return {
+                "ok": False,
+                "error": "not leader",
+                "leader_id": self.core.leader_id,
+                "term": self.core.state.current_term,
+            }
+
+        entry = RaftLogEntry(
+            index=self.core.last_log_index + 1,
+            term=self.core.state.current_term,
+            command=command,
+        )
+        self.core.log.append(entry)
+        self.storage.replace_log(self.core.log)
+
+        replicated = 1
+        for peer_url in self.peer_urls.values():
+            payload = {
+                "term": self.core.state.current_term,
+                "leader_id": self.node_id,
+                "prev_log_index": entry.index - 1,
+                "prev_log_term": self._log_term(entry.index - 1),
+                "entries": [
+                    {
+                        "index": entry.index,
+                        "term": entry.term,
+                        "command": entry.command,
+                    }
+                ],
+                "leader_commit": self.core.state.commit_index,
+            }
+            try:
+                response = await self.client.post(
+                    f"{peer_url}/internal/raft/{self.shard_id}/append_entries",
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            result = response.json()
+            if int(result["term"]) > self.core.state.current_term:
+                self.core.state.current_term = int(result["term"])
+                self.core.state.voted_for = None
+                self.core.role = RaftRole.FOLLOWER
+                self.core.leader_id = None
+                self.storage.save_state(self.core.state)
+                return {
+                    "ok": False,
+                    "error": "leader term is stale",
+                    "leader_id": self.core.leader_id,
+                    "term": self.core.state.current_term,
+                }
+            if result.get("success") is True:
+                replicated += 1
+
+        if replicated < self._majority():
+            return {
+                "ok": False,
+                "error": "no raft majority available",
+                "leader": self.node_id,
+                "term": self.core.state.current_term,
+            }
+
+        self.core.state.commit_index = entry.index
+        result = self.apply_command(entry.command)
+        self.core.state.last_applied = entry.index
+        self.storage.save_state(self.core.state)
+        return {
+            "ok": True,
+            "shard_id": self.shard_id,
+            "leader": self.node_id,
+            "term": self.core.state.current_term,
+            "commit_index": self.core.state.commit_index,
+            "result": result,
+        }
+
+    def _log_term(self, index: int) -> int:
+        if index == 0:
+            return 0
+        for entry in self.core.log:
+            if entry.index == index:
+                return entry.term
+        return 0
