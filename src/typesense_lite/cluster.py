@@ -83,6 +83,13 @@ class ClusterMap:
     def get_replicas(self, shard_id: int) -> list[NodeInfo]:
         return [self.nodes[node_id] for node_id in self.shards[shard_id].replicas]
 
+    def get_shard_voters(self, shard_id: int) -> list[NodeInfo]:
+        placement = self.shards[shard_id]
+        return [
+            self.nodes[placement.primary],
+            *[self.nodes[node_id] for node_id in placement.replicas],
+        ]
+
     def get_search_candidates(self, shard_id: int) -> list[NodeInfo]:
         return [self.get_primary(shard_id), *self.get_replicas(shard_id)]
 
@@ -98,4 +105,3 @@ class ClusterMap:
             for replica in placement.replicas:
                 if replica not in self.nodes:
                     raise ValueError(f"unknown replica node {replica}")
-

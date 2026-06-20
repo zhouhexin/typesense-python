@@ -14,6 +14,7 @@ from .cluster import ClusterMap
 from .coordinator import Coordinator
 from .importer import parse_upload
 from .node import SearchNode
+from .raft_runtime import RaftRuntime
 from .schemas import Document
 
 ClusterInput = Union[dict[str, Any], str, Path, ClusterMap]
@@ -39,6 +40,28 @@ def create_app(
         if node_id is None:
             raise ValueError("node_id is required for data-node role")
         node = SearchNode(node_id=node_id, data_dir=data_dir or ".data/typesense_lite")
+        raft_client = httpx.AsyncClient(timeout=2.0)
+        raft_runtimes = {
+            shard_id: RaftRuntime(
+                node_id=node_id,
+                shard_id=shard_id,
+                members=[member.id for member in cluster.get_shard_voters(shard_id)],
+                data_dir=data_dir or ".data/typesense_lite",
+                peer_urls={
+                    member.id: member.url
+                    for member in cluster.get_shard_voters(shard_id)
+                    if member.id != node_id
+                },
+                client=raft_client,
+                apply_command=lambda command: {"ok": True},
+            )
+            for shard_id, placement in cluster.shards.items()
+            if node_id == placement.primary or node_id in placement.replicas
+        }
+
+        @app.on_event("shutdown")
+        async def close_raft_client() -> None:
+            await raft_client.aclose()
 
         @app.get("/health")
         def node_health() -> dict[str, Any]:
@@ -111,6 +134,24 @@ def create_app(
         @app.get("/internal/shards/{shard_id}/collections/{collection}/document_ids")
         def list_node_document_ids(shard_id: int, collection: str) -> dict[str, list[str]]:
             return {"ids": node.list_document_ids(shard_id, collection)}
+
+        @app.get("/internal/raft/{shard_id}/state")
+        def get_raft_state(shard_id: int) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            return raft_runtimes[shard_id].state()
+
+        @app.post("/internal/raft/{shard_id}/request_vote")
+        async def request_vote(shard_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            return await raft_runtimes[shard_id].handle_request_vote(payload)
+
+        @app.post("/internal/raft/{shard_id}/append_entries")
+        async def append_entries(shard_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            return await raft_runtimes[shard_id].handle_append_entries(payload)
 
         @app.get("/internal/shards/{shard_id}/collections/{collection}/search")
         def search_node_documents(

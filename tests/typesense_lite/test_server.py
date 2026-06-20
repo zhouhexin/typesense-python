@@ -208,6 +208,46 @@ def test_data_node_internal_lists_document_ids(tmp_path) -> None:
     assert response.json() == {"ids": ["doc-1", "doc-3"]}
 
 
+def test_data_node_exposes_raft_state(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    client = TestClient(app)
+
+    response = client.get("/internal/raft/0/state")
+
+    assert response.status_code == 200
+    assert response.json()["node"] == "node-1"
+    assert response.json()["shard_id"] == 0
+    assert response.json()["role"] == "follower"
+
+
+def test_data_node_exposes_request_vote(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/internal/raft/0/request_vote",
+        json={
+            "term": 1,
+            "candidate_id": "node-1",
+            "last_log_index": 0,
+            "last_log_term": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["vote_granted"] is True
+
+
 def test_coordinator_public_document_routes_with_single_node(tmp_path) -> None:
     documents: dict[str, dict] = {}
     app = create_app(

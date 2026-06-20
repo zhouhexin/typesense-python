@@ -25,6 +25,14 @@ def test_cluster_map_returns_placements() -> None:
     assert cluster.node_url("node-2") == "http://127.0.0.1:9102"
 
 
+def test_get_shard_voters_returns_primary_then_replicas() -> None:
+    cluster = ClusterMap.from_dict(CONFIG)
+
+    voters = cluster.get_shard_voters(1)
+
+    assert [node.id for node in voters] == ["node-2", "node-1"]
+
+
 def test_cluster_map_shard_id_is_stable() -> None:
     cluster = ClusterMap.from_dict(CONFIG)
 
