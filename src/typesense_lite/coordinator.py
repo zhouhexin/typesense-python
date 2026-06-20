@@ -8,6 +8,7 @@ import httpx
 
 from .cluster import ClusterMap
 from .health import collect_cluster_health
+from .leader_directory import LeaderDirectory
 from .repair import check_consistency as _check_consistency, repair_collection as _repair_collection
 from .schemas import Document, NodeInfo, SearchHit
 
@@ -23,6 +24,7 @@ class Coordinator:
         self.cluster = cluster
         self._client = client or httpx.AsyncClient(timeout=3.0)
         self._owns_client = client is None
+        self._leaders = LeaderDirectory(cluster, self._client)
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -34,28 +36,25 @@ class Coordinator:
             raise ValueError("document id must be a non-empty string")
 
         shard_id = self.cluster.get_shard_id(document_id)
-        primary = self.cluster.get_primary(shard_id)
-        replicas = self.cluster.get_replicas(shard_id)
-
-        await self._post_document(primary, shard_id, collection, document)
-
-        replica_results: list[dict[str, Any]] = []
-        warnings: list[str] = []
-        for replica in replicas:
-            try:
-                await self._post_document(replica, shard_id, collection, document)
-                replica_results.append({"node": replica.id, "ok": True})
-            except httpx.HTTPError as error:
-                replica_results.append({"node": replica.id, "ok": False})
-                warnings.append(f"replica {replica.id} write failed: {error}")
+        result = await self._submit_raft_command(
+            shard_id,
+            {
+                "type": "add_document",
+                "collection": collection,
+                "document": document,
+            },
+        )
 
         return {
             "ok": True,
             "id": document_id,
             "shard_id": shard_id,
-            "primary": primary.id,
-            "replicas": replica_results,
-            "warnings": warnings,
+            "primary": result["leader"],
+            "leader": result["leader"],
+            "term": result.get("term"),
+            "commit_index": result.get("commit_index"),
+            "replicas": [],
+            "warnings": [],
         }
 
     async def import_documents(
@@ -144,42 +143,27 @@ class Coordinator:
         changes: Document,
     ) -> dict[str, Any]:
         shard_id = self.cluster.get_shard_id(document_id)
-        primary = self.cluster.get_primary(shard_id)
-        replicas = self.cluster.get_replicas(shard_id)
-
-        response = await self._client.patch(
-            self._single_document_url(primary, shard_id, collection, document_id),
-            json=changes,
+        result = await self._submit_raft_command(
+            shard_id,
+            {
+                "type": "update_document",
+                "collection": collection,
+                "document_id": document_id,
+                "changes": changes,
+            },
         )
-        response.raise_for_status()
-
-        replica_results: list[dict[str, Any]] = []
-        warnings: list[str] = []
-        for replica in replicas:
-            try:
-                replica_response = await self._client.patch(
-                    self._single_document_url(
-                        replica,
-                        shard_id,
-                        collection,
-                        document_id,
-                    ),
-                    json=changes,
-                )
-                replica_response.raise_for_status()
-                replica_results.append({"node": replica.id, "ok": True})
-            except httpx.HTTPError as error:
-                replica_results.append({"node": replica.id, "ok": False})
-                warnings.append(f"replica {replica.id} update failed: {error}")
 
         return {
             "ok": True,
             "id": document_id,
-            "document": response.json(),
+            "document": result.get("result", {}),
             "shard_id": shard_id,
-            "primary": primary.id,
-            "replicas": replica_results,
-            "warnings": warnings,
+            "primary": result["leader"],
+            "leader": result["leader"],
+            "term": result.get("term"),
+            "commit_index": result.get("commit_index"),
+            "replicas": [],
+            "warnings": [],
         }
 
     async def delete_document(
@@ -188,40 +172,26 @@ class Coordinator:
         document_id: str,
     ) -> dict[str, Any]:
         shard_id = self.cluster.get_shard_id(document_id)
-        primary = self.cluster.get_primary(shard_id)
-        replicas = self.cluster.get_replicas(shard_id)
-
-        response = await self._client.delete(
-            self._single_document_url(primary, shard_id, collection, document_id)
+        result = await self._submit_raft_command(
+            shard_id,
+            {
+                "type": "delete_document",
+                "collection": collection,
+                "document_id": document_id,
+            },
         )
-        response.raise_for_status()
-
-        replica_results: list[dict[str, Any]] = []
-        warnings: list[str] = []
-        for replica in replicas:
-            try:
-                replica_response = await self._client.delete(
-                    self._single_document_url(
-                        replica,
-                        shard_id,
-                        collection,
-                        document_id,
-                    )
-                )
-                replica_response.raise_for_status()
-                replica_results.append({"node": replica.id, "ok": True})
-            except httpx.HTTPError as error:
-                replica_results.append({"node": replica.id, "ok": False})
-                warnings.append(f"replica {replica.id} delete failed: {error}")
 
         return {
             "ok": True,
             "id": document_id,
-            "document": response.json(),
+            "document": result.get("result", {}),
             "shard_id": shard_id,
-            "primary": primary.id,
-            "replicas": replica_results,
-            "warnings": warnings,
+            "primary": result["leader"],
+            "leader": result["leader"],
+            "term": result.get("term"),
+            "commit_index": result.get("commit_index"),
+            "replicas": [],
+            "warnings": [],
         }
 
     async def search(
@@ -260,6 +230,33 @@ class Coordinator:
             json=document,
         )
         response.raise_for_status()
+
+    async def _submit_raft_command(
+        self,
+        shard_id: int,
+        command: dict[str, Any],
+    ) -> dict[str, Any]:
+        leader = await self._leaders.get_leader(shard_id)
+        response = await self._client.post(
+            f"{leader.url}/internal/raft/{shard_id}/commands",
+            json=command,
+        )
+        if response.status_code == 409:
+            self._leaders.invalidate(shard_id)
+            leader = await self._leaders.get_leader(shard_id)
+            response = await self._client.post(
+                f"{leader.url}/internal/raft/{shard_id}/commands",
+                json=command,
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("ok") is not True:
+            raise httpx.HTTPStatusError(
+                str(payload.get("error") or "raft command failed"),
+                request=response.request,
+                response=response,
+            )
+        return payload
 
     async def _search_shard(
         self,

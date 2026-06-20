@@ -29,6 +29,51 @@ def mock_single_node_client(documents: dict[str, dict]) -> httpx.AsyncClient:
             collections = ["books"] if documents else []
             return httpx.Response(200, json={"collections": collections})
 
+        if path == "/internal/raft/0/state":
+            return httpx.Response(
+                200,
+                json={
+                    "node": "node-1",
+                    "shard_id": 0,
+                    "role": "leader",
+                    "current_term": 1,
+                    "leader_id": "node-1",
+                    "commit_index": len(documents),
+                    "last_applied": len(documents),
+                },
+            )
+
+        if path == "/internal/raft/0/commands" and request.method == "POST":
+            command = json.loads(request.content.decode("utf-8"))
+            command_type = command["type"]
+            if command_type == "add_document":
+                document = command["document"]
+                documents[document["id"]] = document
+                result = document
+            elif command_type == "update_document":
+                document_id = command["document_id"]
+                changes = command["changes"]
+                documents[document_id] = {
+                    **documents[document_id],
+                    **changes,
+                    "id": document_id,
+                }
+                result = documents[document_id]
+            elif command_type == "delete_document":
+                result = documents.pop(command["document_id"])
+            else:
+                return httpx.Response(400, json={"detail": "unknown command"})
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "leader": "node-1",
+                    "term": 1,
+                    "commit_index": len(documents),
+                    "result": result,
+                },
+            )
+
         if path == "/internal/shards/0/collections/books/documents":
             if request.method == "POST":
                 document = json.loads(request.content.decode("utf-8"))
@@ -246,6 +291,38 @@ def test_data_node_exposes_request_vote(tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.json()["vote_granted"] is True
+
+
+def test_data_node_exposes_raft_commands(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    client = TestClient(app)
+    client.post(
+        "/internal/raft/0/request_vote",
+        json={
+            "term": 1,
+            "candidate_id": "node-1",
+            "last_log_index": 0,
+            "last_log_term": 0,
+        },
+    )
+
+    response = client.post(
+        "/internal/raft/0/commands",
+        json={
+            "type": "add_document",
+            "collection": "books",
+            "document": {"id": "doc-1", "title": "Raft"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["result"]["id"] == "doc-1"
 
 
 def test_coordinator_public_document_routes_with_single_node(tmp_path) -> None:

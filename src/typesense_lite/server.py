@@ -41,6 +41,10 @@ def create_app(
             raise ValueError("node_id is required for data-node role")
         node = SearchNode(node_id=node_id, data_dir=data_dir or ".data/typesense_lite")
         raft_client = httpx.AsyncClient(timeout=2.0)
+
+        def make_apply_command(shard_id: int):
+            return lambda command: node.apply_raft_command(shard_id, command)
+
         raft_runtimes = {
             shard_id: RaftRuntime(
                 node_id=node_id,
@@ -53,7 +57,7 @@ def create_app(
                     if member.id != node_id
                 },
                 client=raft_client,
-                apply_command=lambda command: {"ok": True},
+                apply_command=make_apply_command(shard_id),
             )
             for shard_id, placement in cluster.shards.items()
             if node_id == placement.primary or node_id in placement.replicas
@@ -152,6 +156,18 @@ def create_app(
             if shard_id not in raft_runtimes:
                 raise HTTPException(status_code=404, detail="raft shard not found")
             return await raft_runtimes[shard_id].handle_append_entries(payload)
+
+        @app.post("/internal/raft/{shard_id}/commands")
+        async def submit_raft_command(shard_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            runtime = raft_runtimes[shard_id]
+            if len(runtime.members) == 1 and runtime.state()["role"] != "leader":
+                await runtime.start_election()
+            result = await runtime.submit_command(payload)
+            if result.get("ok") is not True:
+                raise HTTPException(status_code=409, detail=result)
+            return result
 
         @app.get("/internal/shards/{shard_id}/collections/{collection}/search")
         def search_node_documents(

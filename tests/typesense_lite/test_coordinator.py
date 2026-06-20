@@ -20,13 +20,35 @@ CONFIG = {
 
 
 @pytest.mark.asyncio
-async def test_coordinator_writes_primary_and_replica() -> None:
+async def test_coordinator_writes_to_raft_leader() -> None:
     cluster = ClusterMap.from_dict(CONFIG)
-    calls: list[str] = []
+    shard_id = cluster.get_shard_id("doc-1")
+    calls: list[tuple[str, str]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(str(request.url))
-        return httpx.Response(200, json={"ok": True})
+        calls.append((request.method, request.url.path))
+        if request.url.path == f"/internal/raft/{shard_id}/state":
+            return httpx.Response(
+                200,
+                json={
+                    "node": "node-2",
+                    "role": "leader",
+                    "current_term": 1,
+                    "leader_id": "node-2",
+                },
+            )
+        if request.url.path == f"/internal/raft/{shard_id}/commands":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "leader": "node-2",
+                    "term": 1,
+                    "commit_index": 1,
+                    "result": {"id": "doc-1"},
+                },
+            )
+        return httpx.Response(404)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         coordinator = Coordinator(cluster=cluster, client=client)
@@ -36,9 +58,55 @@ async def test_coordinator_writes_primary_and_replica() -> None:
         )
 
     assert result["ok"] is True
-    assert len(calls) == 2
-    assert result["primary"] in {"node-1", "node-2"}
+    assert ("POST", f"/internal/raft/{shard_id}/commands") in calls
+    assert result["leader"] == "node-2"
     assert result["warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_add_document_routes_to_raft_leader() -> None:
+    cluster = ClusterMap.from_dict(CONFIG)
+    shard_id = cluster.get_shard_id("doc-1")
+    leader_port = 9102
+    requests: list[tuple[str, int | None, str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.port, request.url.path))
+        if request.url.path == f"/internal/raft/{shard_id}/state":
+            role = "leader" if request.url.port == leader_port else "follower"
+            node = "node-2" if request.url.port == 9102 else "node-1"
+            return httpx.Response(
+                200,
+                json={
+                    "node": node,
+                    "role": role,
+                    "current_term": 1,
+                    "leader_id": "node-2",
+                },
+            )
+        if request.url.path == f"/internal/raft/{shard_id}/commands":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "leader": "node-2",
+                    "term": 1,
+                    "commit_index": 1,
+                    "result": {"id": "doc-1"},
+                },
+            )
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        coordinator = Coordinator(cluster=cluster, client=client)
+        result = await coordinator.add_document(
+            "books",
+            {"id": "doc-1", "title": "Raft"},
+        )
+
+    assert result["ok"] is True
+    assert result["leader"] == "node-2"
+    assert ("POST", leader_port, f"/internal/raft/{shard_id}/commands") in requests
 
 
 @pytest.mark.asyncio
@@ -136,13 +204,35 @@ async def test_coordinator_retrieves_document_by_routed_shard() -> None:
 
 
 @pytest.mark.asyncio
-async def test_coordinator_updates_primary_and_replica() -> None:
+async def test_coordinator_updates_raft_leader() -> None:
     cluster = ClusterMap.from_dict(CONFIG)
-    calls: list[tuple[str, dict]] = []
+    shard_id = cluster.get_shard_id("doc-1")
+    calls: list[tuple[str, str]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        calls.append((str(request.url), dict(request.headers)))
-        return httpx.Response(200, json={"id": "doc-1", "title": "Updated"})
+        calls.append((request.method, request.url.path))
+        if request.url.path == f"/internal/raft/{shard_id}/state":
+            return httpx.Response(
+                200,
+                json={
+                    "node": "node-2",
+                    "role": "leader",
+                    "current_term": 1,
+                    "leader_id": "node-2",
+                },
+            )
+        if request.url.path == f"/internal/raft/{shard_id}/commands":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "leader": "node-2",
+                    "term": 1,
+                    "commit_index": 1,
+                    "result": {"id": "doc-1", "title": "Updated"},
+                },
+            )
+        return httpx.Response(404)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         coordinator = Coordinator(cluster=cluster, client=client)
@@ -154,23 +244,47 @@ async def test_coordinator_updates_primary_and_replica() -> None:
 
     assert result["ok"] is True
     assert result["id"] == "doc-1"
-    assert len(calls) == 2
+    assert ("POST", f"/internal/raft/{shard_id}/commands") in calls
+    assert result["leader"] == "node-2"
     assert result["warnings"] == []
 
 
 @pytest.mark.asyncio
-async def test_coordinator_deletes_primary_and_replica() -> None:
+async def test_coordinator_deletes_raft_leader() -> None:
     cluster = ClusterMap.from_dict(CONFIG)
-    methods: list[str] = []
+    shard_id = cluster.get_shard_id("doc-1")
+    calls: list[tuple[str, str]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
-        methods.append(request.method)
-        return httpx.Response(200, json={"id": "doc-1", "title": "Deleted"})
+        calls.append((request.method, request.url.path))
+        if request.url.path == f"/internal/raft/{shard_id}/state":
+            return httpx.Response(
+                200,
+                json={
+                    "node": "node-2",
+                    "role": "leader",
+                    "current_term": 1,
+                    "leader_id": "node-2",
+                },
+            )
+        if request.url.path == f"/internal/raft/{shard_id}/commands":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "leader": "node-2",
+                    "term": 1,
+                    "commit_index": 1,
+                    "result": {"id": "doc-1", "title": "Deleted"},
+                },
+            )
+        return httpx.Response(404)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         coordinator = Coordinator(cluster=cluster, client=client)
         result = await coordinator.delete_document("books", "doc-1")
 
     assert result["ok"] is True
-    assert methods == ["DELETE", "DELETE"]
+    assert ("POST", f"/internal/raft/{shard_id}/commands") in calls
+    assert result["leader"] == "node-2"
     assert result["warnings"] == []
