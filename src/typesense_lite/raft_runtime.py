@@ -10,7 +10,7 @@ import httpx
 
 from .raft_core import RaftCore
 from .raft_storage import RaftStorage
-from .raft_types import RaftLogEntry
+from .raft_types import RaftLogEntry, RaftRole
 
 
 class RaftRuntime:
@@ -86,3 +86,66 @@ class RaftRuntime:
         self.storage.save_state(self.core.state)
         self.storage.replace_log(self.core.log)
         return result
+
+    async def start_election(self) -> None:
+        self.core.role = RaftRole.CANDIDATE
+        self.core.state.current_term += 1
+        self.core.state.voted_for = self.node_id
+        self.core.leader_id = None
+        self.storage.save_state(self.core.state)
+
+        votes = 1
+        request = {
+            "term": self.core.state.current_term,
+            "candidate_id": self.node_id,
+            "last_log_index": self.core.last_log_index,
+            "last_log_term": self.core.last_log_term,
+        }
+        for peer_url in self.peer_urls.values():
+            try:
+                response = await self.client.post(
+                    f"{peer_url}/internal/raft/{self.shard_id}/request_vote",
+                    json=request,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                continue
+
+            payload = response.json()
+            peer_term = int(payload["term"])
+            if peer_term > self.core.state.current_term:
+                self.core.state.current_term = peer_term
+                self.core.state.voted_for = None
+                self.core.role = RaftRole.FOLLOWER
+                self.storage.save_state(self.core.state)
+                return
+            if payload.get("vote_granted") is True:
+                votes += 1
+
+        if votes >= self._majority():
+            self.core.role = RaftRole.LEADER
+            self.core.leader_id = self.node_id
+
+    def _majority(self) -> int:
+        return len(self.members) // 2 + 1
+
+    async def send_heartbeat(self) -> None:
+        if self.core.role is not RaftRole.LEADER:
+            return
+
+        payload = {
+            "term": self.core.state.current_term,
+            "leader_id": self.node_id,
+            "prev_log_index": self.core.last_log_index,
+            "prev_log_term": self.core.last_log_term,
+            "entries": [],
+            "leader_commit": self.core.state.commit_index,
+        }
+        for peer_url in self.peer_urls.values():
+            try:
+                await self.client.post(
+                    f"{peer_url}/internal/raft/{self.shard_id}/append_entries",
+                    json=payload,
+                )
+            except httpx.HTTPError:
+                continue
