@@ -1,0 +1,736 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Typesense Lite Cluster Console</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --panel: #ffffff;
+        --panel-soft: #f9fafc;
+        --line: #dce2ea;
+        --text: #1d2430;
+        --muted: #667085;
+        --accent: #0f766e;
+        --accent-dark: #115e59;
+        --danger: #b42318;
+        --danger-bg: #fff1f0;
+        --ok: #166534;
+        --warn: #92400e;
+        --shadow: 0 12px 32px rgba(20, 30, 46, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      header {
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+
+      .header-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 22px 24px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 22px;
+        font-weight: 750;
+      }
+
+      h2 {
+        font-size: 15px;
+        font-weight: 750;
+      }
+
+      h3 {
+        font-size: 13px;
+        font-weight: 750;
+      }
+
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      a {
+        color: var(--accent-dark);
+        font-size: 13px;
+        font-weight: 750;
+        text-decoration: none;
+      }
+
+      .subtitle {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        gap: 18px;
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 20px 24px 32px;
+      }
+
+      .stack {
+        display: grid;
+        align-content: start;
+        gap: 18px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        padding: 16px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #ffffff;
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        padding: 10px 11px;
+      }
+
+      input:focus {
+        border-color: var(--accent);
+        outline: 3px solid rgba(15, 118, 110, 0.12);
+      }
+
+      button {
+        border: 0;
+        border-radius: 6px;
+        background: var(--accent);
+        color: #ffffff;
+        cursor: pointer;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 750;
+        min-height: 38px;
+        padding: 0 14px;
+      }
+
+      button:hover {
+        background: var(--accent-dark);
+      }
+
+      button.secondary {
+        border: 1px solid var(--line);
+        background: var(--panel-soft);
+        color: var(--text);
+      }
+
+      button.secondary:hover {
+        border-color: #b8c2cf;
+        background: #eef2f7;
+      }
+
+      .grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .metric,
+      .node,
+      .shard,
+      .election-row {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-soft);
+        padding: 10px;
+      }
+
+      .metric-value {
+        display: block;
+        color: var(--text);
+        font-size: 22px;
+        font-weight: 750;
+        line-height: 1;
+      }
+
+      .metric-label,
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.5;
+        margin-top: 6px;
+      }
+
+      .node,
+      .shard,
+      .election-row {
+        display: grid;
+        gap: 8px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .badge {
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 750;
+        padding: 2px 8px;
+        text-transform: uppercase;
+      }
+
+      .status-healthy {
+        background: #dcfce7;
+        color: var(--ok);
+      }
+
+      .status-degraded {
+        background: #fef3c7;
+        color: var(--warn);
+      }
+
+      .status-unavailable {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .message {
+        border-radius: 6px;
+        background: var(--panel-soft);
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+        margin-top: 12px;
+        padding: 10px 12px;
+      }
+
+      .message.error {
+        background: var(--danger-bg);
+        color: var(--danger);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-top: 12px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--line);
+        padding: 8px 6px;
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 750;
+      }
+
+      @media (max-width: 920px) {
+        .header-inner {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .metric-grid,
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="header-inner">
+        <div>
+          <h1>Typesense Lite Cluster Console</h1>
+          <p class="subtitle">Monitor node health, static primaries, and replica repair.</p>
+        </div>
+        <nav>
+          <a href="/search">Search</a>
+          <a href="/admin">Admin</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <div class="stack">
+        <section class="panel">
+          <div class="section-head">
+            <h2>Cluster Overview</h2>
+            <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
+          </div>
+          <div class="metric-grid">
+            <div class="metric">
+              <span id="node-count" class="metric-value">0</span>
+              <span class="metric-label">nodes</span>
+            </div>
+            <div class="metric">
+              <span id="shard-count" class="metric-value">0</span>
+              <span class="metric-label">shards</span>
+            </div>
+            <div class="metric">
+              <span id="replica-count" class="metric-value">0</span>
+              <span class="metric-label">replicas</span>
+            </div>
+          </div>
+          <div id="cluster-message" class="message" hidden></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Cluster Health</h2>
+            <button class="secondary" id="refresh-health" type="button">Refresh</button>
+          </div>
+          <div id="nodes" class="grid"></div>
+          <div id="health-message" class="message" hidden></div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <div class="section-head">
+            <h2>Shard Placement</h2>
+          </div>
+          <div id="shards" class="grid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Election Status</h2>
+            <span class="badge status-degraded">static primary mode</span>
+          </div>
+          <p class="subtitle">
+            This cluster uses static primary placement. Automatic leader election is not enabled.
+          </p>
+          <div id="election-status" class="grid" style="margin-top: 12px"></div>
+        </section>
+
+        <section class="panel">
+          <div class="section-head">
+            <h2>Consistency & Repair</h2>
+          </div>
+          <div class="toolbar">
+            <input id="collection-input" value="books" autocomplete="off" />
+            <div class="actions">
+              <button id="check-consistency" type="button">Check Consistency</button>
+              <button class="secondary" id="repair-collection" type="button">Repair</button>
+            </div>
+          </div>
+          <div id="repair-message" class="message" hidden></div>
+          <div id="consistency-results"></div>
+          <div id="repair-results"></div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      const nodeCountEl = document.querySelector("#node-count");
+      const shardCountEl = document.querySelector("#shard-count");
+      const replicaCountEl = document.querySelector("#replica-count");
+      const clusterMessageEl = document.querySelector("#cluster-message");
+      const healthMessageEl = document.querySelector("#health-message");
+      const nodesEl = document.querySelector("#nodes");
+      const shardsEl = document.querySelector("#shards");
+      const electionStatusEl = document.querySelector("#election-status");
+      const collectionInputEl = document.querySelector("#collection-input");
+      const repairMessageEl = document.querySelector("#repair-message");
+      const consistencyResultsEl = document.querySelector("#consistency-results");
+      const repairResultsEl = document.querySelector("#repair-results");
+
+      let clusterState = null;
+
+      document.querySelector("#refresh-cluster").addEventListener("click", loadCluster);
+      document.querySelector("#refresh-health").addEventListener("click", loadHealth);
+      document.querySelector("#check-consistency").addEventListener("click", () => {
+        checkConsistency();
+      });
+      document.querySelector("#repair-collection").addEventListener("click", repairCollection);
+
+      loadCluster();
+      loadHealth();
+
+      async function loadCluster() {
+        hideMessage(clusterMessageEl);
+        try {
+          const response = await fetch('/cluster');
+          clusterState = await readJson(response);
+          renderCluster(clusterState);
+        } catch (error) {
+          showMessage(clusterMessageEl, error.message, true);
+        }
+      }
+
+      async function loadHealth() {
+        hideMessage(healthMessageEl);
+        try {
+          const response = await fetch('/cluster/health');
+          const health = await readJson(response);
+          renderHealth(health);
+        } catch (error) {
+          nodesEl.innerHTML = "";
+          showMessage(healthMessageEl, error.message, true);
+        }
+      }
+
+      async function checkConsistency(options = {}) {
+        const clearRepair = options.clearRepair !== false;
+        hideMessage(repairMessageEl);
+        consistencyResultsEl.innerHTML = "";
+        if (clearRepair) {
+          repairResultsEl.innerHTML = "";
+        }
+
+        const collection = clean(collectionInputEl.value);
+        if (!collection) {
+          showMessage(repairMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(collection)}/consistency`
+          );
+          const payload = await readJson(response);
+          renderConsistencyResults(payload);
+          showMessage(repairMessageEl, `Checked ${payload.collection}.`);
+        } catch (error) {
+          showMessage(repairMessageEl, error.message, true);
+        }
+      }
+
+      async function repairCollection() {
+        hideMessage(repairMessageEl);
+        repairResultsEl.innerHTML = "";
+
+        const collection = clean(collectionInputEl.value);
+        if (!collection) {
+          showMessage(repairMessageEl, "Collection is required.", true);
+          return;
+        }
+
+        try {
+          const response = await fetch(
+            `/collections/${encodeURIComponent(collection)}/repair`,
+            { method: "POST" }
+          );
+          const payload = await readJson(response);
+          renderRepairResults(payload);
+          await checkConsistency({ clearRepair: false });
+          showMessage(repairMessageEl, `Repair attempted for ${payload.collection}.`);
+        } catch (error) {
+          showMessage(repairMessageEl, error.message, true);
+        }
+      }
+
+      function renderCluster(cluster) {
+        const nodes = cluster.nodes || [];
+        const shards = cluster.shards || {};
+        const replicaTotal = Object.values(shards).reduce(
+          (total, placement) => total + (placement.replicas || []).length,
+          0
+        );
+
+        nodeCountEl.textContent = nodes.length;
+        shardCountEl.textContent = cluster.shard_count || Object.keys(shards).length;
+        replicaCountEl.textContent = replicaTotal;
+
+        renderShards(shards);
+        renderElectionStatus(shards);
+      }
+
+      function renderHealth(health) {
+        const entries = Object.entries(health.nodes || {});
+        if (!entries.length) {
+          nodesEl.innerHTML = '<div class="message">No nodes configured.</div>';
+          return;
+        }
+
+        nodesEl.innerHTML = entries.map(([nodeId, status]) => {
+          const ok = status.ok === true;
+          return `
+            <div class="node">
+              <div class="row">
+                <h3>${escapeHtml(nodeId)}</h3>
+                <span class="badge ${ok ? "status-healthy" : "status-unavailable"}">
+                  ${ok ? "ok" : "fail"}
+                </span>
+              </div>
+              <div class="meta">${escapeHtml(status.url || "")}</div>
+              ${status.error ? `<div class="message error">${escapeHtml(status.error)}</div>` : ""}
+            </div>
+          `;
+        }).join("");
+
+        if (health.shards) {
+          renderShardHealth(health.shards);
+        }
+      }
+
+      function renderShards(shards) {
+        const entries = Object.entries(shards);
+        if (!entries.length) {
+          shardsEl.innerHTML = '<div class="message">No shards configured.</div>';
+          return;
+        }
+
+        shardsEl.innerHTML = entries.map(([shardId, placement]) => `
+          <div class="shard" data-shard-id="${escapeHtml(shardId)}">
+            <div class="row">
+              <h3>Shard ${escapeHtml(shardId)}</h3>
+              <span class="badge status-degraded">pending health</span>
+            </div>
+            <div class="meta">
+              Primary: ${escapeHtml(placement.primary)}<br />
+              Replicas: ${escapeHtml((placement.replicas || []).join(", ") || "none")}
+            </div>
+          </div>
+        `).join("");
+      }
+
+      function renderShardHealth(shards) {
+        Object.entries(shards).forEach(([shardId, status]) => {
+          const shardEl = document.querySelector(`[data-shard-id="${cssEscape(shardId)}"]`);
+          if (!shardEl) {
+            return;
+          }
+          const badge = shardEl.querySelector(".badge");
+          const statusText = status.status || "unknown";
+          badge.className = `badge ${statusClass(statusText)}`;
+          badge.textContent = statusText;
+        });
+      }
+
+      function renderElectionStatus(shards) {
+        const entries = Object.entries(shards);
+        if (!entries.length) {
+          electionStatusEl.innerHTML = '<div class="message">No primary assignments.</div>';
+          return;
+        }
+
+        electionStatusEl.innerHTML = entries.map(([shardId, placement]) => `
+          <div class="election-row">
+            <div class="row">
+              <h3>Shard ${escapeHtml(shardId)}</h3>
+              <span class="badge status-degraded">static primary mode</span>
+            </div>
+            <div class="meta">
+              Current primary: ${escapeHtml(placement.primary)}<br />
+              Election term: not available<br />
+              Automatic promotion: disabled
+            </div>
+          </div>
+        `).join("");
+      }
+
+      function renderConsistencyResults(payload) {
+        const rows = [];
+        Object.entries(payload.shards || {}).forEach(([shardId, shardInfo]) => {
+          Object.entries(shardInfo.replicas || {}).forEach(([replicaId, replicaInfo]) => {
+            rows.push({
+              shardId,
+              replicaId,
+              missing_on_replica: replicaInfo.missing_on_replica || [],
+              extra_on_replica: replicaInfo.extra_on_replica || [],
+              error: replicaInfo.error || "",
+            });
+          });
+        });
+
+        if (!rows.length) {
+          consistencyResultsEl.innerHTML = '<div class="message">No replica drift found.</div>';
+          return;
+        }
+
+        consistencyResultsEl.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Shard</th>
+                <th>Replica</th>
+                <th>missing_on_replica</th>
+                <th>extra_on_replica</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.shardId)}</td>
+                  <td>${escapeHtml(row.replicaId)}</td>
+                  <td>${escapeHtml(row.missing_on_replica.join(", ") || "none")}</td>
+                  <td>${escapeHtml(row.extra_on_replica.join(", ") || "none")}</td>
+                  <td>${escapeHtml(row.error || "")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      function renderRepairResults(payload) {
+        const rows = [];
+        Object.entries(payload.shards || {}).forEach(([shardId, shardInfo]) => {
+          Object.entries(shardInfo.repaired || {}).forEach(([replicaId, ids]) => {
+            rows.push({ shardId, replicaId, repaired: ids, failed: [] });
+          });
+          Object.entries(shardInfo.failed || {}).forEach(([replicaId, ids]) => {
+            const existing = rows.find(
+              (row) => row.shardId === shardId && row.replicaId === replicaId
+            );
+            if (existing) {
+              existing.failed = ids;
+            } else {
+              rows.push({ shardId, replicaId, repaired: [], failed: ids });
+            }
+          });
+        });
+
+        if (!rows.length) {
+          repairResultsEl.innerHTML = '<div class="message">No documents repaired.</div>';
+          return;
+        }
+
+        repairResultsEl.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Shard</th>
+                <th>Replica</th>
+                <th>repaired</th>
+                <th>failed</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td>${escapeHtml(row.shardId)}</td>
+                  <td>${escapeHtml(row.replicaId)}</td>
+                  <td>${escapeHtml(row.repaired.join(", ") || "none")}</td>
+                  <td>${escapeHtml(row.failed.join(", ") || "none")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        `;
+      }
+
+      async function readJson(response) {
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.message || "Request failed");
+        }
+        return payload;
+      }
+
+      function showMessage(element, message, isError = false) {
+        element.hidden = false;
+        element.className = isError ? "message error" : "message";
+        element.textContent = message;
+      }
+
+      function hideMessage(element) {
+        element.hidden = true;
+        element.textContent = "";
+      }
+
+      function clean(value) {
+        return String(value || "").trim();
+      }
+
+      function statusClass(status) {
+        if (status === "healthy") {
+          return "status-healthy";
+        }
+        if (status === "unavailable") {
+          return "status-unavailable";
+        }
+        return "status-degraded";
+      }
+
+      function cssEscape(value) {
+        if (window.CSS && typeof window.CSS.escape === "function") {
+          return window.CSS.escape(value);
+        }
+        return String(value).replaceAll('"', '\\"');
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+    </script>
+  </body>
+</html>

@@ -427,6 +427,27 @@ def test_coordinator_serves_admin_page() -> None:
     assert 'method: "DELETE"' in response.text
 
 
+def test_coordinator_serves_cluster_console_page() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/cluster-console")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Typesense Lite Cluster Console" in response.text
+    assert "Cluster Health" in response.text
+    assert "Election Status" in response.text
+    assert "Consistency & Repair" in response.text
+    assert "fetch('/cluster')" in response.text
+    assert "fetch('/cluster/health')" in response.text
+    assert "/consistency" in response.text
+    assert "/repair" in response.text
+    assert "static primary mode" in response.text
+    assert 'id="check-consistency"' in response.text
+    assert 'id="repair-collection"' in response.text
+
+
 def test_admin_page_includes_consistency_and_repair_controls() -> None:
     app = create_app(role="coordinator", cluster_config=CONFIG)
     client = TestClient(app)
@@ -489,6 +510,7 @@ def test_data_node_does_not_serve_web_pages() -> None:
     assert client.get("/").status_code == 404
     assert client.get("/search").status_code == 404
     assert client.get("/admin").status_code == 404
+    assert client.get("/cluster-console").status_code == 404
 
 
 def test_data_node_does_not_expose_cluster_health() -> None:

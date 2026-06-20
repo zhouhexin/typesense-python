@@ -64,6 +64,12 @@
         font-weight: 750;
       }
 
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
       a {
         color: var(--accent-dark);
         font-size: 13px;
@@ -395,7 +401,10 @@
           <h1>Typesense Lite Admin</h1>
           <p class="subtitle">Manage collections, documents, and the local cluster.</p>
         </div>
-        <a href="/search">Search</a>
+        <nav>
+          <a href="/search">Search</a>
+          <a href="/cluster-console">Cluster</a>
+        </nav>
       </div>
     </header>
 

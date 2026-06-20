@@ -66,6 +66,12 @@
         font-weight: 750;
       }
 
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
       a {
         color: var(--accent-dark);
         font-size: 13px;
@@ -225,7 +231,10 @@
           <h1>Typesense Lite Search</h1>
           <p class="subtitle">Search documents across the local distributed cluster.</p>
         </div>
-        <a href="/admin">Admin</a>
+        <nav>
+          <a href="/cluster-console">Cluster</a>
+          <a href="/admin">Admin</a>
+        </nav>
       </div>
     </header>
 

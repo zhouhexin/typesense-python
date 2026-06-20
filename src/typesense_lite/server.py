@@ -20,6 +20,7 @@ ClusterInput = Union[dict[str, Any], str, Path, ClusterMap]
 WEB_DIR = Path(__file__).parent / "web"
 SEARCH_HTML = WEB_DIR / "search.html"
 ADMIN_HTML = WEB_DIR / "admin.html"
+CLUSTER_HTML = WEB_DIR / "cluster.html"
 UPLOAD_FILE = File(...)
 
 
@@ -138,6 +139,10 @@ def create_app(
         @app.get("/admin", response_class=HTMLResponse)
         def admin_page() -> str:
             return ADMIN_HTML.read_text(encoding="utf-8")
+
+        @app.get("/cluster-console", response_class=HTMLResponse)
+        def cluster_console_page() -> str:
+            return CLUSTER_HTML.read_text(encoding="utf-8")
 
         @app.get("/health")
         def coordinator_health() -> dict[str, Any]:
