@@ -1,4 +1,5 @@
 import json
+import time
 
 import httpx
 import pytest
@@ -32,6 +33,34 @@ async def test_runtime_exposes_request_vote(tmp_path) -> None:
     )
 
     assert result == {"term": 1, "vote_granted": True}
+
+
+@pytest.mark.asyncio
+async def test_runtime_resets_election_timer_after_granting_vote(tmp_path) -> None:
+    runtime = RaftRuntime(
+        node_id="node-1",
+        shard_id=0,
+        members=["node-1", "node-2"],
+        data_dir=tmp_path,
+        peer_urls={"node-2": "http://node-2"},
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(500))
+        ),
+        apply_command=lambda command: {"ok": True},
+    )
+    runtime.last_heartbeat_at = time.monotonic() - 60
+
+    result = await runtime.handle_request_vote(
+        {
+            "term": 1,
+            "candidate_id": "node-2",
+            "last_log_index": 0,
+            "last_log_term": 0,
+        }
+    )
+
+    assert result["vote_granted"] is True
+    assert time.monotonic() - runtime.last_heartbeat_at < runtime.election_timeout
 
 
 @pytest.mark.asyncio

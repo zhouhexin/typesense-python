@@ -99,6 +99,8 @@ class RaftRuntime:
             last_log_index=int(payload["last_log_index"]),
             last_log_term=int(payload["last_log_term"]),
         )
+        if result.get("vote_granted") is True:
+            self.last_heartbeat_at = time.monotonic()
         self.storage.save_state(self.core.state)
         return result
 
