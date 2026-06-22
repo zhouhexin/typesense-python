@@ -52,10 +52,10 @@ curl 'http://127.0.0.1:9100/collections/books/documents/search?q=raft'
 
 当前 Raft 实现是 per-shard Raft group：每个 shard 独立选 leader，
 coordinator 写入时先发现 shard leader，再把写入提交到
-`/internal/raft/{shard_id}/commands`。默认配置中每个 shard 是 2 个
-voter，这能验证 leader 选举、心跳、日志复制和多数派提交；但 2 voter
-Raft group 在任意 1 个 voter 不可用时无法形成多数派，因此真实故障转移
-需要使用每个 shard 至少 3 个 voter 的配置。
+`/internal/raft/{shard_id}/commands`。默认配置中每个 shard 是 3 个
+voter，可以容忍任意 1 个 voter 暂时不可用。当 follower 离线期间错过
+写入，恢复后 leader 会通过 heartbeat 自动推送缺失日志，直到 follower
+的 `last_log_index`、`commit_index` 和 `last_applied` 追上 leader。
 
 ## Async usage
 

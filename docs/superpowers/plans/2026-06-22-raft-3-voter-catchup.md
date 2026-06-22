@@ -1,12 +1,12 @@
-# Raft 3 Voter And Catch-Up Implementation Plan
+# Raft 三 Voter 与自动追日志实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给执行开发的 agent：** 必须按任务逐步执行。推荐使用 `superpowers:subagent-driven-development`，或使用 `superpowers:executing-plans`。步骤使用 checkbox（`- [ ]`）跟踪状态。
 
-**Goal:** 将默认集群改为每个 shard 由 3 个 voter 组成，并补齐 Raft leader 对落后 follower 的日志追赶能力，使单节点故障恢复后能自动 catch up。
+**目标：** 将默认集群改为每个 shard 由 3 个 voter 组成，并补齐 Raft leader 对落后 follower 的日志追赶能力，使单节点故障恢复后能自动 catch up。
 
-**Architecture:** 默认仍保持单机多进程、多端口模型，但每个 shard 的 Raft group 成员改为 `primary + 2 replicas`，即 3 voter。Raft leader 维护每个 peer 的 `next_index` 和 `match_index`，写入和 heartbeat 都通过同一个复制函数向 follower 推送从 `next_index` 开始的日志后缀；如果 follower 日志不匹配，leader 回退 `next_index` 后重试，直到 follower 追上或 peer 不可用。
+**架构：** 默认仍保持单机多进程、多端口模型，但每个 shard 的 Raft group 成员改为 `primary + 2 replicas`，即 3 voter。Raft leader 维护每个 peer 的 `next_index` 和 `match_index`，写入和 heartbeat 都通过同一个复制函数向 follower 推送从 `next_index` 开始的日志后缀；如果 follower 日志不匹配，leader 回退 `next_index` 后重试，直到 follower 追上或 peer 不可用。
 
-**Tech Stack:** Python 3.9+、FastAPI、httpx、pytest、pytest-asyncio、JSON 文件持久化、现有 `typesense_lite` package。
+**技术栈：** Python 3.9+、FastAPI、httpx、pytest、pytest-asyncio、JSON 文件持久化、现有 `typesense_lite` package。
 
 ---
 
@@ -1097,20 +1097,44 @@ git commit -m "docs: record raft catch up validation"
 
 ---
 
+## 实际验收记录
+
+验收时间：2026-06-22
+
+自动化验证：
+
+```text
+PYTHONPATH=src .venv/bin/python -m pytest tests/typesense_lite -q
+123 passed, 84 warnings in 0.84s
+
+.venv/bin/python -m ruff check src/typesense_lite tests/typesense_lite examples/distributed_lite
+All checks passed!
+```
+
+本地多进程验证：
+
+- 使用临时数据目录 `/tmp/typesense-lite-raft-verify.mCNfds` 启动 `coordinator + node-1 + node-2 + node-3`。
+- 初始 `/cluster/raft` 显示 shard 0/1/2 都有 3 个 member，初始 leader 分别是 `node-1/node-2/node-3`。
+- 基线写入 `raft-base-1` 返回 `ok=true`，提交到 shard 0，`commit_index=1`。
+- 停止 `node-2` 后，shard 1 从原 leader `node-2` 切换到 `node-3`，`node-1` 保持 follower，`node-2` 显示 unavailable。
+- 故障期间写入 `raft-failover-1` 返回 `ok=true`，提交到 shard 1 新 leader `node-3`，`commit_index=1`。
+- 搜索 `q=failover` 返回 `found=2`，结果包含 `raft-failover-1`。
+- 使用同一数据目录重启 `node-2` 后，`/cluster/raft` 显示 shard 1 的 `node-2/node-3/node-1` 均达到 `commit_index=1`、`last_applied=1`，恢复节点已自动 catch up。
+
 ## 最终验收标准
 
-- [ ] 默认 `cluster_config.json` 每个 shard 有 3 个 voter。
-- [ ] 停止任意 1 个 data node 后，其余 2 个 voter 仍可形成多数派。
-- [ ] 旧 leader 停止后，剩余节点可选出新 leader。
-- [ ] leader 维护每个 follower 的 `next_index` 和 `match_index`。
-- [ ] heartbeat 不再只是空心跳；当 follower 落后时会推送缺失日志。
-- [ ] follower 离线期间错过多条 committed writes，恢复后能自动追上。
-- [ ] follower 有冲突日志时，leader 能回退 `next_index` 并覆盖冲突日志。
-- [ ] leader 只在多数派复制后推进 commit。
-- [ ] leader 和 follower 都通过统一的 `_apply_committed_entries()` 应用已提交日志。
-- [ ] `/cluster/raft` 能展示每个 shard 的 3 个 member。
-- [ ] `tests/typesense_lite` 全量通过。
-- [ ] ruff 检查通过。
+- [x] 默认 `cluster_config.json` 每个 shard 有 3 个 voter。
+- [x] 停止任意 1 个 data node 后，其余 2 个 voter 仍可形成多数派。
+- [x] 旧 leader 停止后，剩余节点可选出新 leader。
+- [x] leader 维护每个 follower 的 `next_index` 和 `match_index`。
+- [x] heartbeat 不再只是空心跳；当 follower 落后时会推送缺失日志。
+- [x] follower 离线期间错过多条 committed writes，恢复后能自动追上。
+- [x] follower 有冲突日志时，leader 能回退 `next_index` 并覆盖冲突日志。
+- [x] leader 只在多数派复制后推进 commit。
+- [x] leader 和 follower 都通过统一的 `_apply_committed_entries()` 应用已提交日志。
+- [x] `/cluster/raft` 能展示每个 shard 的 3 个 member。
+- [x] `tests/typesense_lite` 全量通过。
+- [x] ruff 检查通过。
 
 ## 风险和注意点
 
