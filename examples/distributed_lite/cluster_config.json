@@ -24,15 +24,15 @@
   "shards": {
     "0": {
       "primary": "node-1",
-      "replicas": ["node-2"]
+      "replicas": ["node-2", "node-3"]
     },
     "1": {
       "primary": "node-2",
-      "replicas": ["node-3"]
+      "replicas": ["node-3", "node-1"]
     },
     "2": {
       "primary": "node-3",
-      "replicas": ["node-1"]
+      "replicas": ["node-1", "node-2"]
     }
   }
 }

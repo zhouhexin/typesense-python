@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from typesense_lite.cluster import ClusterMap
 
 
@@ -31,6 +33,22 @@ def test_get_shard_voters_returns_primary_then_replicas() -> None:
     voters = cluster.get_shard_voters(1)
 
     assert [node.id for node in voters] == ["node-2", "node-1"]
+
+
+def test_default_cluster_config_uses_three_voters_per_shard() -> None:
+    config_path = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "distributed_lite"
+        / "cluster_config.json"
+    )
+    cluster = ClusterMap.from_file(config_path)
+
+    assert cluster.shard_count == 3
+    for shard_id in range(cluster.shard_count):
+        voters = cluster.get_shard_voters(shard_id)
+        assert len(voters) == 3
+        assert {node.id for node in voters} == {"node-1", "node-2", "node-3"}
 
 
 def test_cluster_map_shard_id_is_stable() -> None:
