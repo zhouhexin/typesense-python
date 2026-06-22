@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,12 @@ import httpx
 from .raft_core import RaftCore
 from .raft_storage import RaftStorage
 from .raft_types import RaftLogEntry, RaftRole
+
+
+@dataclass
+class PeerProgress:
+    next_index: int
+    match_index: int = 0
 
 
 class RaftRuntime:
@@ -45,6 +52,7 @@ class RaftRuntime:
         self.heartbeat_interval = heartbeat_interval
         self.last_heartbeat_at = time.monotonic()
         self._tasks: list[asyncio.Task[None]] = []
+        self.peer_progress: dict[str, PeerProgress] = {}
         self.storage = RaftStorage(data_dir, node_id=node_id, shard_id=shard_id)
         self.core = RaftCore(
             node_id=node_id,
@@ -154,8 +162,7 @@ class RaftRuntime:
                 votes += 1
 
         if votes >= self._majority():
-            self.core.role = RaftRole.LEADER
-            self.core.leader_id = self.node_id
+            self._become_leader()
 
     def _majority(self) -> int:
         return len(self.members) // 2 + 1
@@ -267,6 +274,15 @@ class RaftRuntime:
             if entry.index == index:
                 return entry.term
         return 0
+
+    def _become_leader(self) -> None:
+        self.core.role = RaftRole.LEADER
+        self.core.leader_id = self.node_id
+        next_index = self.core.last_log_index + 1
+        self.peer_progress = {
+            peer_id: PeerProgress(next_index=next_index)
+            for peer_id in self.peer_urls
+        }
 
     def _apply_committed_entries(self) -> None:
         for entry in sorted(self.core.log, key=lambda item: item.index):

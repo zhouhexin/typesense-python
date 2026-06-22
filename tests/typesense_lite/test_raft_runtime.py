@@ -84,6 +84,30 @@ async def test_runtime_starts_election_and_becomes_leader_with_majority(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_leader_initializes_peer_progress_after_election(tmp_path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"term": 1, "vote_granted": True})
+
+    runtime = RaftRuntime(
+        node_id="node-1",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path,
+        peer_urls={"node-2": "http://node-2", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        apply_command=lambda command: {"ok": True},
+    )
+
+    await runtime.start_election()
+
+    assert runtime.state()["role"] == "leader"
+    assert runtime.peer_progress["node-2"].next_index == 1
+    assert runtime.peer_progress["node-2"].match_index == 0
+    assert runtime.peer_progress["node-3"].next_index == 1
+    assert runtime.peer_progress["node-3"].match_index == 0
+
+
+@pytest.mark.asyncio
 async def test_leader_sends_append_entries_heartbeat(tmp_path) -> None:
     seen_paths = []
 
