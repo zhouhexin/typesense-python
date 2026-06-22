@@ -721,6 +721,57 @@ def test_coordinator_cluster_raft_endpoint(tmp_path) -> None:
     assert response.json()["shards"]["0"]["members"]["node-1"]["role"] == "leader"
 
 
+def test_cluster_raft_endpoint_reports_three_voters(tmp_path) -> None:
+    three_voter_config = {
+        "coordinator": {"host": "127.0.0.1", "port": 9100},
+        "shard_count": 1,
+        "nodes": [
+            {"id": "node-1", "host": "127.0.0.1", "port": 9101},
+            {"id": "node-2", "host": "127.0.0.1", "port": 9102},
+            {"id": "node-3", "host": "127.0.0.1", "port": 9103},
+        ],
+        "shards": {
+            "0": {"primary": "node-1", "replicas": ["node-2", "node-3"]},
+        },
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        node_id = {
+            9101: "node-1",
+            9102: "node-2",
+            9103: "node-3",
+        }[request.url.port]
+        role = "leader" if node_id == "node-1" else "follower"
+        return httpx.Response(
+            200,
+            json={
+                "node": node_id,
+                "shard_id": 0,
+                "role": role,
+                "current_term": 3,
+                "leader_id": "node-1",
+                "commit_index": 7,
+                "last_applied": 7,
+            },
+        )
+
+    app = create_app(
+        role="coordinator",
+        cluster_config=three_voter_config,
+        data_dir=tmp_path,
+        coordinator_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    client = TestClient(app)
+
+    response = client.get("/cluster/raft")
+
+    assert response.status_code == 200
+    shard = response.json()["shards"]["0"]
+    assert shard["leader"] == "node-1"
+    assert set(shard["members"]) == {"node-1", "node-2", "node-3"}
+    assert shard["members"]["node-3"]["role"] == "follower"
+
+
 def test_coordinator_consistency_endpoint_reports_replica_drift(tmp_path) -> None:
     config = {
         "coordinator": {"host": "127.0.0.1", "port": 9100},
