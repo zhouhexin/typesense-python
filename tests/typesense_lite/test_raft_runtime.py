@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import anyio
@@ -309,3 +311,75 @@ async def test_runtime_background_loop_elects_leader_and_sends_heartbeat(tmp_pat
     assert runtime.state()["role"] == "leader"
     assert "/internal/raft/0/request_vote" in seen_paths
     assert "/internal/raft/0/append_entries" in seen_paths
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_catches_up_follower_with_missing_entries(tmp_path) -> None:
+    follower_applied = []
+    follower = RaftRuntime(
+        node_id="node-2",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path / "follower",
+        peer_urls={"node-1": "http://node-1", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(500))
+        ),
+        apply_command=lambda command: follower_applied.append(command) or {"ok": True},
+    )
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/request_vote"):
+            return httpx.Response(200, json={"term": 1, "vote_granted": True})
+        if request.url.host == "node-2":
+            return httpx.Response(
+                200,
+                json=await follower.handle_append_entries(
+                    json.loads(request.content.decode("utf-8"))
+                ),
+            )
+        return httpx.Response(503)
+
+    leader = RaftRuntime(
+        node_id="node-1",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path / "leader",
+        peer_urls={"node-2": "http://node-2", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        apply_command=lambda command: {"ok": True},
+    )
+    await leader.start_election()
+    leader.core.log = [
+        RaftLogEntry(
+            index=1,
+            term=1,
+            command={
+                "type": "add_document",
+                "collection": "books",
+                "document": {"id": "book-1"},
+            },
+        ),
+        RaftLogEntry(
+            index=2,
+            term=1,
+            command={
+                "type": "add_document",
+                "collection": "books",
+                "document": {"id": "book-2"},
+            },
+        ),
+    ]
+    leader.core.state.commit_index = 2
+    leader.core.state.last_applied = 2
+    leader.peer_progress["node-2"].next_index = 1
+
+    await leader.send_heartbeat()
+
+    assert follower.state()["last_log_index"] == 2
+    assert follower.state()["commit_index"] == 2
+    assert follower.state()["last_applied"] == 2
+    assert [command["document"]["id"] for command in follower_applied] == [
+        "book-1",
+        "book-2",
+    ]

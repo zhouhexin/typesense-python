@@ -171,22 +171,8 @@ class RaftRuntime:
         if self.core.role is not RaftRole.LEADER:
             return
 
-        payload = {
-            "term": self.core.state.current_term,
-            "leader_id": self.node_id,
-            "prev_log_index": self.core.last_log_index,
-            "prev_log_term": self.core.last_log_term,
-            "entries": [],
-            "leader_commit": self.core.state.commit_index,
-        }
-        for peer_url in self.peer_urls.values():
-            try:
-                await self.client.post(
-                    f"{peer_url}/internal/raft/{self.shard_id}/append_entries",
-                    json=payload,
-                )
-            except httpx.HTTPError:
-                continue
+        for peer_id, peer_url in self.peer_urls.items():
+            await self._replicate_to_peer(peer_id, peer_url)
 
     async def submit_command(self, command: dict[str, Any]) -> dict[str, Any]:
         if self.core.role is not RaftRole.LEADER:
@@ -274,6 +260,62 @@ class RaftRuntime:
             if entry.index == index:
                 return entry.term
         return 0
+
+    def _entries_from(self, start_index: int) -> list[RaftLogEntry]:
+        return [entry for entry in self.core.log if entry.index >= start_index]
+
+    async def _replicate_to_peer(self, peer_id: str, peer_url: str) -> bool:
+        progress = self.peer_progress.setdefault(
+            peer_id,
+            PeerProgress(next_index=self.core.last_log_index + 1),
+        )
+
+        while progress.next_index >= 1:
+            prev_log_index = progress.next_index - 1
+            payload = {
+                "term": self.core.state.current_term,
+                "leader_id": self.node_id,
+                "prev_log_index": prev_log_index,
+                "prev_log_term": self._log_term(prev_log_index),
+                "entries": [
+                    {
+                        "index": entry.index,
+                        "term": entry.term,
+                        "command": entry.command,
+                    }
+                    for entry in self._entries_from(progress.next_index)
+                ],
+                "leader_commit": self.core.state.commit_index,
+            }
+
+            try:
+                response = await self.client.post(
+                    f"{peer_url}/internal/raft/{self.shard_id}/append_entries",
+                    json=payload,
+                )
+                response.raise_for_status()
+            except httpx.HTTPError:
+                return False
+
+            result = response.json()
+            peer_term = int(result["term"])
+            if peer_term > self.core.state.current_term:
+                self.core.state.current_term = peer_term
+                self.core.state.voted_for = None
+                self.core.role = RaftRole.FOLLOWER
+                self.core.leader_id = None
+                self.storage.save_state(self.core.state)
+                return False
+
+            if result.get("success") is True:
+                match_index = int(result["match_index"])
+                progress.match_index = match_index
+                progress.next_index = match_index + 1
+                return True
+
+            progress.next_index = max(1, progress.next_index - 1)
+
+        return False
 
     def _become_leader(self) -> None:
         self.core.role = RaftRole.LEADER
