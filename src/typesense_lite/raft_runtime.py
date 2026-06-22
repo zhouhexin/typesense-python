@@ -142,29 +142,53 @@ class RaftRuntime:
             "last_log_index": self.core.last_log_index,
             "last_log_term": self.core.last_log_term,
         }
-        for peer_url in self.peer_urls.values():
-            try:
-                response = await self.client.post(
-                    f"{peer_url}/internal/raft/{self.shard_id}/request_vote",
-                    json=request,
-                )
-                response.raise_for_status()
-            except httpx.HTTPError:
-                continue
+        if votes >= self._majority():
+            self._become_leader()
+            return
 
-            payload = response.json()
+        tasks = [
+            asyncio.create_task(self._request_vote_from_peer(peer_url, request))
+            for peer_url in self.peer_urls.values()
+        ]
+        for task in asyncio.as_completed(tasks):
+            payload = await task
+            if payload is None:
+                continue
             peer_term = int(payload["term"])
             if peer_term > self.core.state.current_term:
                 self.core.state.current_term = peer_term
                 self.core.state.voted_for = None
                 self.core.role = RaftRole.FOLLOWER
                 self.storage.save_state(self.core.state)
+                await self._cancel_pending_tasks(tasks)
                 return
             if payload.get("vote_granted") is True:
                 votes += 1
+                if votes >= self._majority():
+                    self._become_leader()
+                    await self._cancel_pending_tasks(tasks)
+                    return
 
-        if votes >= self._majority():
-            self._become_leader()
+    async def _cancel_pending_tasks(self, tasks: list[asyncio.Task[Any]]) -> None:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _request_vote_from_peer(
+        self,
+        peer_url: str,
+        request: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            response = await self.client.post(
+                f"{peer_url}/internal/raft/{self.shard_id}/request_vote",
+                json=request,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+        return response.json()
 
     def _majority(self) -> int:
         return len(self.members) // 2 + 1
@@ -173,8 +197,13 @@ class RaftRuntime:
         if self.core.role is not RaftRole.LEADER:
             return
 
-        for peer_id, peer_url in self.peer_urls.items():
-            await self._replicate_to_peer(peer_id, peer_url)
+        await asyncio.gather(
+            *[
+                self._replicate_to_peer(peer_id, peer_url)
+                for peer_id, peer_url in self.peer_urls.items()
+            ],
+            return_exceptions=True,
+        )
 
     async def submit_command(self, command: dict[str, Any]) -> dict[str, Any]:
         if self.core.role is not RaftRole.LEADER:

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 
@@ -168,6 +169,38 @@ async def test_leader_sends_append_entries_heartbeat(tmp_path) -> None:
         "/internal/raft/0/request_vote",
         "/internal/raft/0/append_entries",
     ]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_reaches_healthy_peer_without_waiting_for_slow_peer(
+    tmp_path,
+) -> None:
+    healthy_peer_contacted = anyio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/request_vote"):
+            return httpx.Response(200, json={"term": 1, "vote_granted": True})
+        if request.url.host == "node-2":
+            await anyio.sleep(0.2)
+            return httpx.Response(503)
+        healthy_peer_contacted.set()
+        return httpx.Response(200, json={"term": 1, "success": True, "match_index": 0})
+
+    runtime = RaftRuntime(
+        node_id="node-1",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path,
+        peer_urls={"node-2": "http://node-2", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        apply_command=lambda command: {"ok": True},
+    )
+    await runtime.start_election()
+
+    heartbeat = asyncio.create_task(runtime.send_heartbeat())
+    with anyio.fail_after(0.05):
+        await healthy_peer_contacted.wait()
+    await heartbeat
 
 
 @pytest.mark.asyncio
