@@ -192,44 +192,10 @@ class RaftRuntime:
         self.storage.replace_log(self.core.log)
 
         replicated = 1
-        for peer_url in self.peer_urls.values():
-            payload = {
-                "term": self.core.state.current_term,
-                "leader_id": self.node_id,
-                "prev_log_index": entry.index - 1,
-                "prev_log_term": self._log_term(entry.index - 1),
-                "entries": [
-                    {
-                        "index": entry.index,
-                        "term": entry.term,
-                        "command": entry.command,
-                    }
-                ],
-                "leader_commit": self.core.state.commit_index,
-            }
-            try:
-                response = await self.client.post(
-                    f"{peer_url}/internal/raft/{self.shard_id}/append_entries",
-                    json=payload,
-                )
-                response.raise_for_status()
-            except httpx.HTTPError:
-                continue
-
-            result = response.json()
-            if int(result["term"]) > self.core.state.current_term:
-                self.core.state.current_term = int(result["term"])
-                self.core.state.voted_for = None
-                self.core.role = RaftRole.FOLLOWER
-                self.core.leader_id = None
-                self.storage.save_state(self.core.state)
-                return {
-                    "ok": False,
-                    "error": "leader term is stale",
-                    "leader_id": self.core.leader_id,
-                    "term": self.core.state.current_term,
-                }
-            if result.get("success") is True:
+        for peer_id, peer_url in self.peer_urls.items():
+            if await self._replicate_to_peer(peer_id, peer_url):
+                if self.peer_progress[peer_id].match_index < entry.index:
+                    continue
                 replicated += 1
 
         if replicated < self._majority():
@@ -241,8 +207,7 @@ class RaftRuntime:
             }
 
         self.core.state.commit_index = entry.index
-        result = self.apply_command(entry.command)
-        self.core.state.last_applied = entry.index
+        result = self._apply_committed_entries()
         self.storage.save_state(self.core.state)
         return {
             "ok": True,
@@ -326,14 +291,16 @@ class RaftRuntime:
             for peer_id in self.peer_urls
         }
 
-    def _apply_committed_entries(self) -> None:
+    def _apply_committed_entries(self) -> dict[str, Any] | None:
+        result = None
         for entry in sorted(self.core.log, key=lambda item: item.index):
             if entry.index <= self.core.state.last_applied:
                 continue
             if entry.index > self.core.state.commit_index:
                 break
-            self.apply_command(entry.command)
+            result = self.apply_command(entry.command)
             self.core.state.last_applied = entry.index
+        return result
 
     async def _run_election_loop(self) -> None:
         while True:

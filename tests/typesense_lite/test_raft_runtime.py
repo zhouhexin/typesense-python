@@ -185,6 +185,45 @@ async def test_leader_commits_command_after_majority_replication(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_three_voter_leader_commits_when_one_follower_is_down(tmp_path) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/request_vote"):
+            return httpx.Response(200, json={"term": 1, "vote_granted": True})
+        if request.url.host == "node-2":
+            return httpx.Response(
+                200,
+                json={"term": 1, "success": True, "match_index": 1},
+            )
+        return httpx.Response(503)
+
+    applied = []
+    runtime = RaftRuntime(
+        node_id="node-1",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path,
+        peer_urls={"node-2": "http://node-2", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        apply_command=lambda command: applied.append(command) or {"ok": True},
+    )
+    await runtime.start_election()
+
+    result = await runtime.submit_command(
+        {
+            "type": "add_document",
+            "collection": "books",
+            "document": {"id": "book-1"},
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["commit_index"] == 1
+    assert runtime.peer_progress["node-2"].match_index == 1
+    assert runtime.peer_progress["node-3"].match_index == 0
+    assert applied[0]["document"]["id"] == "book-1"
+
+
+@pytest.mark.asyncio
 async def test_follower_applies_committed_append_entries(tmp_path) -> None:
     applied = []
     runtime = RaftRuntime(
