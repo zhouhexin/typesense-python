@@ -14,6 +14,7 @@ from .cluster import ClusterMap
 from .coordinator import Coordinator
 from .importer import parse_upload
 from .node import SearchNode
+from .node_registrar import NodeRegistrar
 from .raft_runtime import RaftRuntime
 from .schemas import Document
 
@@ -31,6 +32,10 @@ def create_app(
     cluster_config: ClusterInput,
     node_id: str | None = None,
     data_dir: str | Path | None = None,
+    bind_host: str | None = None,
+    bind_port: int | None = None,
+    coordinator_url: str | None = None,
+    coordinator_instance: Coordinator | None = None,
     coordinator_client: httpx.AsyncClient | None = None,
 ) -> FastAPI:
     cluster = _load_cluster(cluster_config)
@@ -67,11 +72,30 @@ def create_app(
         async def start_raft_runtimes() -> None:
             for runtime in raft_runtimes.values():
                 runtime.start()
+            if coordinator_url:
+                advertise_host = os.environ.get(
+                    "NODE_ADVERTISE_HOST", bind_host or "",
+                )
+                advertise_port = int(
+                    os.environ.get("NODE_ADVERTISE_PORT", str(bind_port or 0)),
+                )
+                registrar = NodeRegistrar(
+                    coordinator_url=coordinator_url,
+                    node_id=node_id,
+                    advertise_host=advertise_host,
+                    advertise_port=advertise_port,
+                    role="node",
+                )
+                await registrar.start()
+                app.state.registrar = registrar
 
         @app.on_event("shutdown")
         async def close_raft_client() -> None:
             for runtime in raft_runtimes.values():
                 await runtime.stop()
+            registrar = getattr(app.state, "registrar", None)
+            if registrar is not None:
+                await registrar.aclose()
             await raft_client.aclose()
 
         @app.get("/health")
@@ -189,7 +213,10 @@ def create_app(
         return app
 
     if role == "coordinator":
-        coordinator = Coordinator(cluster, client=coordinator_client)
+        coordinator = coordinator_instance or Coordinator(
+            cluster, client=coordinator_client,
+        )
+        app.state.coordinator = coordinator
 
         @app.on_event("shutdown")
         async def close_coordinator() -> None:
@@ -219,6 +246,39 @@ def create_app(
         @app.get("/cluster/raft")
         async def cluster_raft() -> dict[str, Any]:
             return await coordinator.raft_status()
+
+        @app.get("/cluster/nodes")
+        def cluster_nodes() -> dict[str, Any]:
+            return coordinator.cluster_nodes()
+
+        @app.post("/internal/cluster/nodes/register")
+        def register_node(payload: dict[str, Any]) -> dict[str, Any]:
+            try:
+                node_id = str(payload["node_id"])
+                host = str(payload["host"])
+                port = int(payload["port"])
+                role = str(payload.get("role", "node"))
+            except (KeyError, TypeError, ValueError) as error:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"invalid registration payload: {error}",
+                ) from error
+            return coordinator.register_node(
+                node_id=node_id,
+                host=host,
+                port=port,
+                role=role,
+            )
+
+        @app.put("/internal/cluster/nodes/{node_id}/heartbeat")
+        def heartbeat_node(node_id: str) -> dict[str, Any]:
+            entry = coordinator.heartbeat_node(node_id)
+            if entry is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"node {node_id!r} not registered",
+                )
+            return entry
 
         @app.get("/cluster")
         def get_cluster() -> dict[str, Any]:
@@ -351,11 +411,15 @@ def _create_app_from_env() -> FastAPI:
     cluster_config = os.environ.get("CLUSTER_CONFIG")
     if cluster_config is None:
         raise RuntimeError("CLUSTER_CONFIG environment variable is required")
+    port_env = os.environ.get("PORT")
     return create_app(
         role=role,
         cluster_config=cluster_config,
         node_id=os.environ.get("NODE_ID"),
         data_dir=os.environ.get("DATA_DIR", ".data/typesense_lite"),
+        bind_host=os.environ.get("HOST"),
+        bind_port=int(port_env) if port_env else None,
+        coordinator_url=os.environ.get("COORDINATOR_URL"),
     )
 
 

@@ -1,0 +1,43 @@
+{
+  "ssh": {
+    "user": "",
+    "identity_file": null,
+    "options": []
+  },
+  "local_simulation": true,
+  "coordinator": {
+    "host": "192.168.99.10",
+    "port": 9100,
+    "data_dir": "/tmp/ts-sim/coordinator"
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "host": "192.168.99.11",
+      "port": 9100,
+      "data_dir": "/tmp/ts-sim/node-1"
+    },
+    {
+      "id": "node-2",
+      "host": "192.168.99.12",
+      "port": 9100,
+      "data_dir": "/tmp/ts-sim/node-2"
+    },
+    {
+      "id": "node-3",
+      "host": "192.168.99.13",
+      "port": 9100,
+      "data_dir": "/tmp/ts-sim/node-3"
+    }
+  ],
+  "shards": {
+    "0": {"primary": "node-1", "replicas": ["node-2", "node-3"]},
+    "1": {"primary": "node-2", "replicas": ["node-3", "node-1"]},
+    "2": {"primary": "node-3", "replicas": ["node-1", "node-2"]}
+  },
+  "shard_count": 3,
+  "remote_project_root": ".",
+  "remote_venv_python": ".venv/bin/python",
+  "remote_config_path": "/tmp/ts-sim/cluster_config.json",
+  "log_dir": "/tmp/ts-sim/logs"
+}

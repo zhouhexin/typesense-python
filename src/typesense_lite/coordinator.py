@@ -8,7 +8,9 @@ import httpx
 
 from .cluster import ClusterMap
 from .health import collect_cluster_health
+from .http_client import make_cross_machine_client
 from .leader_directory import LeaderDirectory
+from .node_directory import NodeDirectory
 from .repair import check_consistency as _check_consistency, repair_collection as _repair_collection
 from .schemas import Document, NodeInfo, SearchHit
 
@@ -20,11 +22,15 @@ class Coordinator:
         self,
         cluster: ClusterMap,
         client: httpx.AsyncClient | None = None,
+        *,
+        node_directory: NodeDirectory | None = None,
+        node_alive_timeout: float = 30.0,
     ) -> None:
         self.cluster = cluster
-        self._client = client or httpx.AsyncClient(timeout=3.0)
+        self._client = client or make_cross_machine_client()
         self._owns_client = client is None
         self._leaders = LeaderDirectory(cluster, self._client)
+        self.nodes = node_directory or NodeDirectory(alive_timeout=node_alive_timeout)
 
     async def aclose(self) -> None:
         if self._owns_client:
@@ -370,3 +376,57 @@ class Coordinator:
     async def repair_collection(self, collection: str) -> dict[str, Any]:
         """Repair replica consistency by copying missing documents from primary."""
         return await _repair_collection(self.cluster, collection, self._client)
+
+    # ------------------------------------------------------------------
+    # Node discovery (register / heartbeat / alive snapshot)
+    # ------------------------------------------------------------------
+
+    def register_node(
+        self,
+        *,
+        node_id: str,
+        host: str,
+        port: int,
+        role: str,
+    ) -> dict[str, Any]:
+        """Add or refresh a node's liveness entry. Returns the new entry."""
+        entry = self.nodes.register(
+            node_id=node_id,
+            host=host,
+            port=port,
+            role=role,
+        )
+        return self._entry_to_dict(entry)
+
+    def heartbeat_node(self, node_id: str) -> dict[str, Any] | None:
+        """Refresh a node's last-seen timestamp. Returns None if unknown."""
+        entry = self.nodes.heartbeat(node_id)
+        if entry is None:
+            return None
+        return self._entry_to_dict(entry)
+
+    def cluster_nodes(self) -> dict[str, Any]:
+        """Return static topology plus currently alive (registered) nodes."""
+        self.nodes.cleanup_expired()
+        static = [
+            {"id": node.id, "host": node.host, "port": node.port}
+            for node in self.cluster.nodes.values()
+        ]
+        alive = list(self.nodes.snapshot().values())
+        alive.sort(key=lambda entry: entry["node_id"])
+        return {
+            "static": static,
+            "alive": alive,
+            "alive_timeout_seconds": self.nodes.alive_timeout,
+        }
+
+    @staticmethod
+    def _entry_to_dict(entry: Any) -> dict[str, Any]:
+        return {
+            "node_id": entry.node_id,
+            "host": entry.host,
+            "port": entry.port,
+            "role": entry.role,
+            "last_seen": entry.last_seen,
+            "registered_at": entry.registered_at,
+        }

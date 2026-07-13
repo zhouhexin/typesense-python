@@ -1,0 +1,43 @@
+{
+  "ssh": {
+    "user": "ubuntu",
+    "identity_file": "~/.ssh/id_rsa",
+    "options": ["-o", "StrictHostKeyChecking=accept-new"]
+  },
+  "coordinator": {
+    "host": "192.168.1.10",
+    "port": 9100,
+    "data_dir": "/home/ubuntu/typesense-lite-data/coordinator"
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "host": "192.168.1.11",
+      "port": 9101,
+      "data_dir": "/home/ubuntu/typesense-lite-data/node-1"
+    },
+    {
+      "id": "node-2",
+      "host": "192.168.1.12",
+      "port": 9101,
+      "data_dir": "/home/ubuntu/typesense-lite-data/node-2"
+    },
+    {
+      "id": "node-3",
+      "host": "192.168.1.13",
+      "port": 9101,
+      "data_dir": "/home/ubuntu/typesense-lite-data/node-3"
+    }
+  ],
+  "shards": {
+    "0": {"primary": "node-1", "replicas": ["node-2", "node-3"]},
+    "1": {"primary": "node-2", "replicas": ["node-3", "node-1"]},
+    "2": {"primary": "node-3", "replicas": ["node-1", "node-2"]}
+  },
+  "shard_count": 3,
+  "remote_project_root": "/home/ubuntu/typesense-python",
+  "remote_venv_python": "/home/ubuntu/typesense-python/.venv/bin/python",
+  "remote_config_path": "/home/ubuntu/typesense-lite-data/cluster_config.json",
+  "log_dir": "/home/ubuntu/typesense-lite-data/logs",
+  "sync_mode": "rsync"
+}
