@@ -55,6 +55,23 @@ def test_build_env_sets_role_config_data_dir_and_node_id() -> None:
     assert env["NODE_ID"] == "node-1"
 
 
+def test_build_env_allows_configless_node_with_coordinator_url() -> None:
+    env = build_env(
+        _spec(
+            config=None,
+            coordinator_url="http://10.0.0.5:9100",
+            advertise_host="10.0.0.6",
+            advertise_port=9101,
+        ),
+        base_env={"CLUSTER_CONFIG": "/stale/config.json"},
+    )
+
+    assert "CLUSTER_CONFIG" not in env
+    assert env["COORDINATOR_URL"] == "http://10.0.0.5:9100"
+    assert env["NODE_ADVERTISE_HOST"] == "10.0.0.6"
+    assert env["NODE_ADVERTISE_PORT"] == "9101"
+
+
 def test_build_env_omits_node_id_when_role_is_coordinator() -> None:
     env = build_env(_spec(role="coordinator", node_id=None))
 
@@ -125,6 +142,23 @@ def test_parse_args_requires_node_id_for_role_node() -> None:
         parse_args(["--role", "node", "--config", "/tmp/cfg.json"])
 
 
+def test_parse_args_accepts_configless_node_with_coordinator_url() -> None:
+    spec = parse_args(
+        [
+            "--role", "node",
+            "--node-id", "node-1",
+            "--coordinator-url", "http://10.0.0.5:9100",
+            "--advertise-host", "10.0.0.6",
+            "--advertise-port", "9101",
+        ],
+    )
+
+    assert spec.config is None
+    assert spec.coordinator_url == "http://10.0.0.5:9100"
+    assert spec.advertise_host == "10.0.0.6"
+    assert spec.advertise_port == 9101
+
+
 def test_parse_args_requires_config() -> None:
     with pytest.raises(SystemExit):
         parse_args(["--role", "coordinator"])
@@ -159,12 +193,23 @@ def parse_args_with_env(env: dict[str, str], argv: list[str]) -> RunNodeSpec:
 
     original = os.environ.copy()
     try:
-        for key in ("ROLE", "HOST", "PORT", "NODE_ID", "CLUSTER_CONFIG", "DATA_DIR"):
+        env_keys = (
+            "ROLE",
+            "HOST",
+            "PORT",
+            "NODE_ID",
+            "CLUSTER_CONFIG",
+            "DATA_DIR",
+            "COORDINATOR_URL",
+            "NODE_ADVERTISE_HOST",
+            "NODE_ADVERTISE_PORT",
+        )
+        for key in env_keys:
             os.environ.pop(key, None)
         os.environ.update(env)
         return parse_args(argv)
     finally:
-        for key in ("ROLE", "HOST", "PORT", "NODE_ID", "CLUSTER_CONFIG", "DATA_DIR"):
+        for key in env_keys:
             if key in original:
                 os.environ[key] = original[key]
             else:

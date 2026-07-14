@@ -16,7 +16,7 @@ from typesense_lite.deploy_plan import (
     build_stop_commands,
     build_sync_code_commands,
 )
-from typesense_lite.inventory import Inventory
+from typesense_lite.inventory import Inventory, InventorySSH
 
 
 pytestmark = [pytest.mark.unit, pytest.mark.deploy]
@@ -29,8 +29,10 @@ def _inventory(**overrides) -> Inventory:
     )
     base.update(overrides)
     return Inventory(
-        ssh=__import__("typesense_lite.inventory", fromlist=["InventorySSH"]).InventorySSH(
-            user=base["ssh_user"], options=base["ssh_options"],
+        ssh=InventorySSH(
+            user=base["ssh_user"],
+            options=base["ssh_options"],
+            identity_file=base.get("identity_file"),
         ),
         coordinator=__import__("typesense_lite.inventory", fromlist=["InventoryHost"]).InventoryHost(
             host="192.168.1.10", port=9100, data_dir="/home/u/data/coordinator",
@@ -71,6 +73,8 @@ def _ctx(inventory: Inventory, **overrides) -> DeployContext:
         ssh_options=tuple(inventory.ssh.options),
         askpass=overrides.get("askpass", False),
         local_simulation=overrides.get("local_simulation", False),
+        pull_config=overrides.get("pull_config", False),
+        ssh_identity_file=overrides.get("ssh_identity_file"),
     )
 
 
@@ -134,8 +138,7 @@ def test_sync_code_uses_git_when_configured() -> None:
 
     for cmd in commands:
         assert cmd.argv[0] == "ssh"
-        assert "git" in cmd.argv
-        assert "pull" in cmd.argv
+        assert "git pull --ff-only" in cmd.argv[-1]
 
 
 def _inventory_with_sync(mode: str) -> Inventory:
@@ -158,6 +161,8 @@ def _ip_in_argv(argv: tuple[str, ...]) -> str | None:
     for arg in argv:
         if arg in candidates:
             return arg
+        if arg.startswith("ubuntu@") and arg.removeprefix("ubuntu@") in candidates:
+            return arg.removeprefix("ubuntu@")
     return None
 
 
@@ -183,10 +188,11 @@ def test_start_commands_remote_uses_ssh_per_role() -> None:
     ]
     assert len(mkdir_cmds) == 4
 
-    # Each mkdir command creates a data_dir and a server.pid file.
+    # Each mkdir command creates the data and log dirs, not server.pid itself.
     for cmd in mkdir_cmds:
         joined = cmd.argv[-1]
-        assert "server.pid" in joined
+        assert "mkdir -p" in joined
+        assert "server.pid" not in joined
 
 
 def test_start_commands_local_simulation_spawns_python_directly() -> None:
@@ -209,13 +215,13 @@ def test_start_commands_local_simulation_spawns_python_directly() -> None:
 
     # Every data-node command advertises the right host/port via env.
     coordinator_env = next(c.env for c in commands if c.env["ROLE"] == "coordinator")
-    assert coordinator_env["NODE_ADVERTISE_HOST"] == "192.168.1.10"
-    assert coordinator_env["NODE_ADVERTISE_PORT"] == "9100"
+    assert "NODE_ADVERTISE_HOST" not in coordinator_env
 
     node_envs = [c.env for c in commands if c.env["ROLE"] == "node"]
     assert len(node_envs) == 3
     advertised_hosts = {env["NODE_ADVERTISE_HOST"] for env in node_envs}
     assert advertised_hosts == {"192.168.1.11", "192.168.1.12", "192.168.1.13"}
+    assert {env["COORDINATOR_URL"] for env in node_envs} == {"http://192.168.1.10:9100"}
 
 
 def test_start_commands_ssh_uses_user_at_host() -> None:
@@ -224,12 +230,65 @@ def test_start_commands_ssh_uses_user_at_host() -> None:
 
     ssh_main_cmds = [c for c in commands if c.argv[0] == "ssh" and "nohup" in c.argv[-1]]
     for cmd in ssh_main_cmds:
-        # cmd.argv format: ("ssh", "ubuntu@", "-o", "...", host, "<shell>")
-        assert cmd.argv[1] == "ubuntu@"
-        assert cmd.argv[2] == "-o"
+        assert cmd.argv[1:3] == ("-o", "StrictHostKeyChecking=accept-new")
+        assert any(
+            arg.startswith("ubuntu@192.168.1.")
+            for arg in cmd.argv
+        )
 
 
-def test_stop_commands_emit_kill_with_pid_file() -> None:
+def test_start_commands_pull_config_nodes_fetch_from_coordinator() -> None:
+    inventory = _inventory()
+    commands = build_start_commands(inventory, _ctx(inventory, pull_config=True))
+
+    start_shells = [c.argv[-1] for c in commands if c.argv[0] == "ssh" and "nohup" in c.argv[-1]]
+    coordinator_shell = next(shell for shell in start_shells if "--role coordinator" in shell)
+    node_shells = [shell for shell in start_shells if "--role node" in shell]
+
+    assert "--config /home/u/data/cluster_config.json" in coordinator_shell
+    assert len(node_shells) == 3
+    for shell in node_shells:
+        assert "--config" not in shell
+        assert "--coordinator-url http://192.168.1.10:9100" in shell
+        assert "--advertise-host" in shell
+        assert "--advertise-port 9101" in shell
+
+
+def test_ship_config_can_target_coordinator_only(tmp_path: Path) -> None:
+    inventory = _inventory()
+    config_path = tmp_path / "cluster_config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    commands = build_ship_config_commands(
+        inventory,
+        _ctx(inventory, pull_config=True),
+        local_config_path=str(config_path),
+        targets=[inventory.coordinator.host],
+    )
+
+    assert len(commands) == 1
+    assert commands[0].argv[-1] == f"ubuntu@192.168.1.10:{inventory.remote_config_path}"
+
+
+def test_ssh_identity_file_is_in_ssh_scp_and_rsync_options(tmp_path: Path) -> None:
+    inventory = _inventory(identity_file="/home/u/.ssh/deploy_key")
+    ctx = _ctx(inventory, ssh_identity_file="/home/u/.ssh/deploy_key")
+    config_path = tmp_path / "cluster_config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    scp_cmd = build_ship_config_commands(
+        inventory, ctx, local_config_path=str(config_path),
+    )[0]
+    rsync_cmd = build_sync_code_commands(
+        inventory, ctx, local_project_root="/local/repo",
+    )[0]
+    ssh_cmd = build_start_commands(inventory, ctx)[0]
+
+    assert scp_cmd.argv[1:3] == ("-i", "/home/u/.ssh/deploy_key")
+    assert "-i /home/u/.ssh/deploy_key" in rsync_cmd.argv[rsync_cmd.argv.index("-e") + 1]
+    assert ssh_cmd.argv[1:3] == ("-i", "/home/u/.ssh/deploy_key")
+
+
     inventory = _inventory()
     commands = build_stop_commands(inventory, _ctx(inventory))
 

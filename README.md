@@ -97,6 +97,10 @@ voter，可以容忍任意 1 个 voter 暂时不可用。当 follower 离线期�
 > 目标机器假设：Python ≥ 3.9、仓库代码已在每台机器上（脚本会做
 > `rsync` 或 `git pull`）、coordinator 与所有 data node 网络互通、
 > 对外监听端口（默认 9100/9101）未被防火墙拦截。
+>
+> 安全边界：当前多机部署是 demo/实验模式，不实现 TLS、mTLS、API key
+> 认证或 ACL。只应部署在可信私有网络内，并通过防火墙或安全组限制
+> coordinator/data node 端口的访问范围。
 
 ### 2. 部署
 

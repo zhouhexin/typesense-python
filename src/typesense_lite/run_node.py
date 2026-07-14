@@ -32,10 +32,13 @@ class RunNodeSpec:
     role: str
     host: str
     port: int
-    config: str
+    config: str | None
     data_dir: str
     node_id: str | None = None
     log_file: str | None = None
+    coordinator_url: str | None = None
+    advertise_host: str | None = None
+    advertise_port: int | None = None
     extra_env: Mapping[str, str] = field(default_factory=dict)
 
 
@@ -60,10 +63,19 @@ def build_env(
     """Return the env dict that ``typesense_lite.server`` expects."""
     env: dict[str, str] = dict(base_env if base_env is not None else os.environ)
     env["ROLE"] = spec.role
-    env["CLUSTER_CONFIG"] = spec.config
+    if spec.config:
+        env["CLUSTER_CONFIG"] = spec.config
+    else:
+        env.pop("CLUSTER_CONFIG", None)
     env["DATA_DIR"] = spec.data_dir
     if spec.node_id:
         env["NODE_ID"] = spec.node_id
+    if spec.coordinator_url:
+        env["COORDINATOR_URL"] = spec.coordinator_url
+    if spec.advertise_host:
+        env["NODE_ADVERTISE_HOST"] = spec.advertise_host
+    if spec.advertise_port is not None:
+        env["NODE_ADVERTISE_PORT"] = str(spec.advertise_port)
     for key, value in spec.extra_env.items():
         env[key] = value
     return env
@@ -114,6 +126,26 @@ def parse_args(argv: Sequence[str] | None = None) -> RunNodeSpec:
         help="Path to cluster_config.json (or CLUSTER_CONFIG env).",
     )
     parser.add_argument(
+        "--coordinator-url",
+        default=os.environ.get("COORDINATOR_URL"),
+        help="Coordinator URL used by data nodes for pull-config and registration.",
+    )
+    parser.add_argument(
+        "--advertise-host",
+        default=os.environ.get("NODE_ADVERTISE_HOST"),
+        help="Host data nodes advertise to the coordinator.",
+    )
+    parser.add_argument(
+        "--advertise-port",
+        type=int,
+        default=(
+            int(os.environ["NODE_ADVERTISE_PORT"])
+            if os.environ.get("NODE_ADVERTISE_PORT")
+            else None
+        ),
+        help="Port data nodes advertise to the coordinator.",
+    )
+    parser.add_argument(
         "--data-dir",
         default=os.environ.get("DATA_DIR", DEFAULT_DATA_DIR),
     )
@@ -126,7 +158,9 @@ def parse_args(argv: Sequence[str] | None = None) -> RunNodeSpec:
 
     if parsed.role == "node" and not parsed.node_id:
         parser.error("--node-id is required when --role=node")
-    if not parsed.config:
+    if not parsed.config and not (
+        parsed.role == "node" and parsed.coordinator_url
+    ):
         parser.error("--config (or CLUSTER_CONFIG env) is required")
 
     return RunNodeSpec(
@@ -137,6 +171,9 @@ def parse_args(argv: Sequence[str] | None = None) -> RunNodeSpec:
         data_dir=parsed.data_dir,
         node_id=parsed.node_id,
         log_file=parsed.log_file,
+        coordinator_url=parsed.coordinator_url,
+        advertise_host=parsed.advertise_host,
+        advertise_port=parsed.advertise_port,
     )
 
 

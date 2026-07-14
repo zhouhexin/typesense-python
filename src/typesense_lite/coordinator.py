@@ -8,7 +8,7 @@ import httpx
 
 from .cluster import ClusterMap
 from .health import collect_cluster_health
-from .http_client import make_cross_machine_client
+from .http_client import get_with_retry, make_cross_machine_client
 from .leader_directory import LeaderDirectory
 from .node_directory import NodeDirectory
 from .repair import check_consistency as _check_consistency, repair_collection as _repair_collection
@@ -111,8 +111,9 @@ class Coordinator:
         collections: set[str] = set()
         for node in self.cluster.nodes.values():
             try:
-                response = await self._client.get(f"{node.url}/internal/collections")
-                response.raise_for_status()
+                response = await get_with_retry(
+                    self._client, f"{node.url}/internal/collections"
+                )
             except httpx.HTTPError:
                 continue
             collections.update(response.json().get("collections", []))
@@ -121,25 +122,25 @@ class Coordinator:
     async def list_documents(self, collection: str) -> dict[str, list[Document]]:
         documents: list[Document] = []
         for shard_id in range(self.cluster.shard_count):
-            response = await self._client.get(
-                self._documents_url(self.cluster.get_primary(shard_id), shard_id, collection)
+            response = await get_with_retry(
+                self._client,
+                self._documents_url(self.cluster.get_primary(shard_id), shard_id, collection),
             )
-            response.raise_for_status()
             documents.extend(response.json().get("documents", []))
         documents.sort(key=lambda document: str(document["id"]))
         return {"documents": documents}
 
     async def get_document(self, collection: str, document_id: str) -> Document:
         shard_id = self.cluster.get_shard_id(document_id)
-        response = await self._client.get(
+        response = await get_with_retry(
+            self._client,
             self._single_document_url(
                 self.cluster.get_primary(shard_id),
                 shard_id,
                 collection,
                 document_id,
-            )
+            ),
         )
-        response.raise_for_status()
         return response.json()
 
     async def update_document(
@@ -274,11 +275,11 @@ class Coordinator:
         errors: list[str] = []
         for node in self.cluster.get_search_candidates(shard_id):
             try:
-                response = await self._client.get(
+                response = await get_with_retry(
+                    self._client,
                     self._search_url(node, shard_id, collection),
                     params={"q": query, "limit": limit},
                 )
-                response.raise_for_status()
                 payload = response.json()
                 return payload.get("hits", []), None
             except httpx.HTTPError as error:
@@ -332,10 +333,10 @@ class Coordinator:
 
             for node in self.cluster.get_shard_voters(shard_id):
                 try:
-                    response = await self._client.get(
-                        f"{node.url}/internal/raft/{shard_id}/state"
+                    response = await get_with_retry(
+                        self._client,
+                        f"{node.url}/internal/raft/{shard_id}/state",
                     )
-                    response.raise_for_status()
                 except httpx.HTTPError as error:
                     members[node.id] = {
                         "role": "unavailable",

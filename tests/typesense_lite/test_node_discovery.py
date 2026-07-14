@@ -181,7 +181,17 @@ def test_cluster_nodes_endpoint_returns_static_and_alive() -> None:
     assert [entry["node_id"] for entry in payload["alive"]] == ["node-1"]
 
 
-def test_register_and_heartbeat_endpoints() -> None:
+def test_internal_cluster_config_endpoint_returns_static_topology() -> None:
+    cluster = ClusterMap.from_dict(CLUSTER_CONFIG)
+    coordinator = Coordinator(cluster)
+
+    with _build_coordinator_app(coordinator) as client:
+        response = client.get("/internal/cluster/config")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == cluster.to_dict()
+
+
     cluster = ClusterMap.from_dict(CLUSTER_CONFIG)
     coordinator = Coordinator(cluster)
     with _build_coordinator_app(coordinator) as client:

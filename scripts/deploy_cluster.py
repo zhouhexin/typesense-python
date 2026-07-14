@@ -55,12 +55,24 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_OUT = ROOT / ".data" / "deploy" / "cluster_config.json"
 
 
-def _build_context(inventory: Inventory, *, askpass: bool, local_sim: bool) -> DeployContext:
+def _build_context(
+    inventory: Inventory,
+    *,
+    askpass: bool,
+    local_sim: bool,
+    pull_config: bool = False,
+) -> DeployContext:
     return DeployContext(
         ssh_user=inventory.ssh.user,
         ssh_options=tuple(inventory.ssh.options),
         askpass=askpass,
         local_simulation=local_sim,
+        pull_config=pull_config,
+        ssh_identity_file=(
+            str(Path(inventory.ssh.identity_file).expanduser())
+            if inventory.ssh.identity_file
+            else None
+        ),
     )
 
 
@@ -90,14 +102,28 @@ def _ensure_local_config(inventory: Inventory, output_path: Path) -> Path:
 
 def cmd_deploy(args: argparse.Namespace) -> int:
     inventory = Inventory.from_file(args.inventory)
-    ctx = _build_context(inventory, askpass=args.askpass, local_sim=args.local_sim)
+    ctx = _build_context(
+        inventory,
+        askpass=args.askpass,
+        local_sim=args.local_sim,
+        pull_config=args.pull_config,
+    )
 
     config_path = Path(args.config_out)
     _ensure_local_config(inventory, config_path)
 
     commands: list[ShellCommand] = []
 
-    if not args.pull_config:
+    if args.pull_config:
+        commands.extend(
+            build_ship_config_commands(
+                inventory,
+                ctx,
+                local_config_path=str(config_path),
+                targets=[inventory.coordinator.host],
+            ),
+        )
+    else:
         commands.extend(
             build_ship_config_commands(
                 inventory, ctx, local_config_path=str(config_path),
@@ -141,20 +167,20 @@ def cmd_status(args: argparse.Namespace) -> int:
     inventory = Inventory.from_file(args.inventory)
     ctx = _build_context(inventory, askpass=args.askpass, local_sim=args.local_sim)
     commands = build_status_commands(inventory, ctx)
-    return _emit(commands, dry_run=False)
+    return _emit(commands, dry_run=args.dry_run)
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
     inventory = Inventory.from_file(args.inventory)
     ctx = _build_context(inventory, askpass=args.askpass, local_sim=args.local_sim)
-    return _emit(build_stop_commands(inventory, ctx), dry_run=False)
+    return _emit(build_stop_commands(inventory, ctx), dry_run=args.dry_run)
 
 
 def cmd_logs(args: argparse.Namespace) -> int:
     inventory = Inventory.from_file(args.inventory)
     ctx = _build_context(inventory, askpass=args.askpass, local_sim=args.local_sim)
     commands = build_logs_command(inventory, ctx, host=args.host)
-    return _emit(commands, dry_run=False)
+    return _emit(commands, dry_run=args.dry_run)
 
 
 def build_parser() -> argparse.ArgumentParser:

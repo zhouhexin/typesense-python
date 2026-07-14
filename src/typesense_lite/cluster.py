@@ -73,6 +73,26 @@ class ClusterMap:
         cluster._validate()
         return cluster
 
+    def to_dict(self) -> ClusterConfig:
+        return {
+            "coordinator": {
+                "host": self.coordinator.host,
+                "port": self.coordinator.port,
+            },
+            "shard_count": self.shard_count,
+            "nodes": [
+                {"id": node.id, "host": node.host, "port": node.port}
+                for node in self.nodes.values()
+            ],
+            "shards": {
+                str(shard_id): {
+                    "primary": placement.primary,
+                    "replicas": list(placement.replicas),
+                }
+                for shard_id, placement in self.shards.items()
+            },
+        }
+
     def get_shard_id(self, document_id: str) -> int:
         digest = hashlib.sha256(document_id.encode("utf-8")).hexdigest()
         return int(digest, 16) % self.shard_count

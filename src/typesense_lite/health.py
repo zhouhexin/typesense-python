@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from .http_client import get_with_retry
+
 
 @dataclass
 class NodeHealth:
@@ -86,8 +88,7 @@ async def collect_cluster_health(
     # Check health of each node
     for node_id, node in cluster.nodes.items():
         try:
-            response = await client.get(f"{node.url}/health", timeout=2.0)
-            response.raise_for_status()
+            response = await get_with_retry(client, f"{node.url}/health")
             payload = response.json()
             if payload.get("ok") is not True:
                 nodes[node_id] = NodeHealth(

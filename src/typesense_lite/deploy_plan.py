@@ -43,6 +43,8 @@ class DeployContext:
     ssh_options: tuple[str, ...]
     askpass: bool = False
     local_simulation: bool = False
+    pull_config: bool = False
+    ssh_identity_file: str | None = None
     local_config_source: str | None = None  # path to the generated config file
 
     def ssh_prefix(self) -> tuple[str, ...]:
@@ -50,6 +52,8 @@ class DeployContext:
         opts: list[str] = []
         if self.askpass:
             opts.extend(["-o", "BatchMode=no", "-o", "NumberOfPasswordPrompts=1"])
+        if self.ssh_identity_file:
+            opts.extend(["-i", self.ssh_identity_file])
         opts.extend(self.ssh_options)
         return tuple(opts)
 
@@ -59,14 +63,15 @@ def build_ship_config_commands(
     ctx: DeployContext,
     *,
     local_config_path: str,
+    targets: Sequence[str] | None = None,
 ) -> list[ShellCommand]:
-    """scp the local cluster_config.json to every host."""
+    """scp the local cluster_config.json to target hosts."""
     if ctx.local_simulation:
         return []
     source = Path(local_config_path).resolve()
     cmds: list[ShellCommand] = []
-    targets = _remote_targets(inventory)
-    for host in targets:
+    target_hosts = list(targets) if targets is not None else _remote_targets(inventory)
+    for host in target_hosts:
         remote = f"{_ssh_target_arg(ctx, host)}:{inventory.remote_config_path}"
         ssh_opts = ctx.ssh_prefix()
         argv = ("scp", *ssh_opts, str(source), remote)
@@ -92,7 +97,7 @@ def build_sync_code_commands(
     ssh_opts = ctx.ssh_prefix()
     targets = _remote_targets(inventory)
     for host in targets:
-        remote_target = f"{_ssh_user_at(ctx)}@{host}:{inventory.remote_project_root}"
+        remote_target = f"{_ssh_target_arg(ctx, host)}:{inventory.remote_project_root}"
         if inventory.sync_mode == "rsync":
             argv = (
                 "rsync",
@@ -107,9 +112,8 @@ def build_sync_code_commands(
             )
         elif inventory.sync_mode == "git":
             argv = (
-                "ssh", *_ssh_target_args(ctx), *ssh_opts, host,
-                "cd", inventory.remote_project_root,
-                "&&", "git", "pull", "--ff-only",
+                "ssh", *ssh_opts, _ssh_target_arg(ctx, host),
+                f"cd {shlex.quote(inventory.remote_project_root)} && git pull --ff-only",
             )
         else:
             raise ValueError(f"unknown sync_mode {inventory.sync_mode!r}")
@@ -179,7 +183,7 @@ def build_logs_command(
             argv = ("tail", "-F", f"{inventory.log_dir}/{h}.log")
         else:
             argv = (
-                "ssh", *_ssh_target_args(ctx), *ssh_opts, h,
+                "ssh", *ssh_opts, _ssh_target_arg(ctx, h),
                 "tail", "-F", log_path,
             )
         cmds.append(ShellCommand(argv=argv, description=f"tail logs on {h}"))
@@ -199,14 +203,6 @@ def _remote_targets(inventory: Inventory) -> list[str]:
 def _ssh_user_at(ctx: DeployContext) -> str:
     return ctx.ssh_user or ""
 
-
-def _ssh_target_args(ctx: DeployContext) -> tuple[str, ...]:
-    """Return ``("user@",)`` when ssh_user is set, else ``()``.
-
-    Used to prefix the host argument on ``ssh user@host command...``.
-    """
-    user = _ssh_user_at(ctx)
-    return (f"{user}@",) if user else ()
 
 
 def _ssh_target_arg(ctx: DeployContext, host: str) -> str:
@@ -237,6 +233,7 @@ def _start_command_for_host(
         data_dir = inventory.coordinator.data_dir
         log_file = f"{inventory.log_dir}/{host}.log"
         env_overrides: dict[str, str] = {"ROLE": "coordinator"}
+        include_config = True
     else:
         assert node_id is not None
         node = inventory.nodes[node_id]
@@ -244,14 +241,21 @@ def _start_command_for_host(
         port = node.port
         data_dir = node.data_dir
         log_file = f"{inventory.log_dir}/{host}.log"
-        env_overrides = {"ROLE": "node", "NODE_ID": node_id}
+        env_overrides = {
+            "ROLE": "node",
+            "NODE_ID": node_id,
+            "COORDINATOR_URL": inventory.coordinator_url_value(),
+        }
+        include_config = not ctx.pull_config
 
-    env_overrides["CLUSTER_CONFIG"] = inventory.remote_config_path
+    if include_config:
+        env_overrides["CLUSTER_CONFIG"] = inventory.remote_config_path
     env_overrides["DATA_DIR"] = data_dir
     env_overrides["HOST"] = "0.0.0.0"
     env_overrides["PORT"] = str(port)
-    env_overrides["NODE_ADVERTISE_HOST"] = host
-    env_overrides["NODE_ADVERTISE_PORT"] = str(port)
+    if role == "node":
+        env_overrides["NODE_ADVERTISE_HOST"] = host
+        env_overrides["NODE_ADVERTISE_PORT"] = str(port)
 
     pid_file = f"{data_dir}/server.pid"
     log_dir = Path(log_file).parent
@@ -260,30 +264,26 @@ def _start_command_for_host(
         f"{inner_python}",
         f"{inventory.remote_project_root}/scripts/run_node.py",
         "--role", env_overrides["ROLE"],
-        "--host", "0.0.0.0",
+        "--host", "0.0.0.0" if not ctx.local_simulation else host,
         "--port", str(port),
-        "--config", inventory.remote_config_path,
         "--data-dir", data_dir,
     ]
+    if include_config:
+        remote_cmd_parts.extend(["--config", inventory.remote_config_path])
     if "NODE_ID" in env_overrides:
         remote_cmd_parts.extend(["--node-id", env_overrides["NODE_ID"]])
+    if "COORDINATOR_URL" in env_overrides:
+        remote_cmd_parts.extend(["--coordinator-url", env_overrides["COORDINATOR_URL"]])
+    if "NODE_ADVERTISE_HOST" in env_overrides:
+        remote_cmd_parts.extend(["--advertise-host", env_overrides["NODE_ADVERTISE_HOST"]])
+    if "NODE_ADVERTISE_PORT" in env_overrides:
+        remote_cmd_parts.extend(["--advertise-port", env_overrides["NODE_ADVERTISE_PORT"]])
 
     remote_cmd = " ".join(shlex.quote(part) for part in remote_cmd_parts)
 
     if ctx.local_simulation:
-        argv_list = [
-            inner_python,
-            f"{inventory.remote_project_root}/scripts/run_node.py",
-            "--role", env_overrides["ROLE"],
-            "--host", host,
-            "--port", str(port),
-            "--config", inventory.remote_config_path,
-            "--data-dir", data_dir,
-        ]
-        if "NODE_ID" in env_overrides:
-            argv_list.extend(["--node-id", env_overrides["NODE_ID"]])
         cmd = ShellCommand(
-            argv=tuple(argv_list),
+            argv=tuple(remote_cmd_parts),
             env=env_overrides,
             description=f"start {role}{':' + node_id if node_id else ''} locally on {host}",
         )
@@ -291,8 +291,8 @@ def _start_command_for_host(
 
     ssh_opts = ctx.ssh_prefix()
     pid_argv = (
-        "ssh", *_ssh_target_args(ctx), *ssh_opts, host,
-        f"mkdir -p {shlex.quote(data_dir)} {shlex.quote(pid_file)} 2>/dev/null || true",
+        "ssh", *ssh_opts, _ssh_target_arg(ctx, host),
+        f"mkdir -p {shlex.quote(data_dir)} {shlex.quote(str(log_dir))}",
     )
     pid_cmd = ShellCommand(
         argv=pid_argv,
@@ -300,8 +300,8 @@ def _start_command_for_host(
     )
 
     argv = (
-        "ssh", *_ssh_target_args(ctx), *ssh_opts, host,
-        f"mkdir -p {shlex.quote(str(log_dir))} && nohup {remote_cmd} > {shlex.quote(log_file)} 2>&1 & echo $! > {shlex.quote(pid_file)}",
+        "ssh", *ssh_opts, _ssh_target_arg(ctx, host),
+        f"nohup {remote_cmd} > {shlex.quote(log_file)} 2>&1 & echo $! > {shlex.quote(pid_file)}",
     )
     main_cmd = ShellCommand(
         argv=argv,
@@ -334,7 +334,7 @@ def _stop_command_for_host(
 
     ssh_opts = ctx.ssh_prefix()
     argv = (
-        "ssh", *_ssh_target_args(ctx), *ssh_opts, host,
+        "ssh", *ssh_opts, _ssh_target_arg(ctx, host),
         f"if [ -f {shlex.quote(pid_file)} ]; then kill $(cat {shlex.quote(pid_file)}) && rm {shlex.quote(pid_file)}; fi",
     )
     return [ShellCommand(argv=argv, description=f"stop {role} on {host}")]
@@ -370,7 +370,7 @@ def _status_command_for_host(
 
     ssh_opts = ctx.ssh_prefix()
     argv = (
-        "ssh", *_ssh_target_args(ctx), *ssh_opts, host,
+        "ssh", *ssh_opts, _ssh_target_arg(ctx, host),
         f"pid=$(cat {shlex.quote(pid_file)} 2>/dev/null); "
         f"if [ -z \"$pid\" ]; then echo DOWN; else "
         f"code=$(curl -sS -o /dev/null -w '%{{http_code}}' {shlex.quote(health_url)}); "

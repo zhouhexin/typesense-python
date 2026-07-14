@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from .cluster import ClusterMap
+from .http_client import get_with_retry
 from .schemas import NodeInfo
 
 
@@ -32,10 +33,10 @@ class LeaderDirectory:
         hinted_leader_id: str | None = None
         for node in self.cluster.get_shard_voters(shard_id):
             try:
-                response = await self.client.get(
-                    f"{node.url}/internal/raft/{shard_id}/state"
+                response = await get_with_retry(
+                    self.client,
+                    f"{node.url}/internal/raft/{shard_id}/state",
                 )
-                response.raise_for_status()
             except httpx.HTTPError:
                 continue
 

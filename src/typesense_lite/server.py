@@ -10,8 +10,9 @@ import httpx
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 
-from .cluster import ClusterMap
+from .cluster import ClusterConfig, ClusterMap
 from .coordinator import Coordinator
+from .http_client import cross_machine_timeout, make_cross_machine_client
 from .importer import parse_upload
 from .node import SearchNode
 from .node_registrar import NodeRegistrar
@@ -45,7 +46,7 @@ def create_app(
         if node_id is None:
             raise ValueError("node_id is required for data-node role")
         node = SearchNode(node_id=node_id, data_dir=data_dir or ".data/typesense_lite")
-        raft_client = httpx.AsyncClient(timeout=2.0)
+        raft_client = make_cross_machine_client()
 
         def make_apply_command(shard_id: int):
             return lambda command: node.apply_raft_command(shard_id, command)
@@ -280,26 +281,13 @@ def create_app(
                 )
             return entry
 
+        @app.get("/internal/cluster/config")
+        def get_internal_cluster_config() -> dict[str, Any]:
+            return cluster.to_dict()
+
         @app.get("/cluster")
         def get_cluster() -> dict[str, Any]:
-            return {
-                "coordinator": {
-                    "host": cluster.coordinator.host,
-                    "port": cluster.coordinator.port,
-                },
-                "shard_count": cluster.shard_count,
-                "nodes": [
-                    {"id": node.id, "host": node.host, "port": node.port}
-                    for node in cluster.nodes.values()
-                ],
-                "shards": {
-                    str(shard_id): {
-                        "primary": placement.primary,
-                        "replicas": list(placement.replicas),
-                    }
-                    for shard_id, placement in cluster.shards.items()
-                },
-            }
+            return cluster.to_dict()
 
         @app.get("/collections")
         async def list_collections() -> dict[str, list[str]]:
@@ -406,11 +394,23 @@ def _load_cluster(cluster_config: ClusterInput) -> ClusterMap:
     return ClusterMap.from_dict(cluster_config)
 
 
+def _fetch_cluster_config(coordinator_url: str) -> ClusterConfig:
+    url = f"{coordinator_url.rstrip('/')}/internal/cluster/config"
+    with httpx.Client(timeout=cross_machine_timeout()) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+
 def _create_app_from_env() -> FastAPI:
     role = os.environ.get("ROLE", "coordinator")
-    cluster_config = os.environ.get("CLUSTER_CONFIG")
+    cluster_config: ClusterInput | None = os.environ.get("CLUSTER_CONFIG")
+    coordinator_url = os.environ.get("COORDINATOR_URL")
     if cluster_config is None:
-        raise RuntimeError("CLUSTER_CONFIG environment variable is required")
+        if role == "node" and coordinator_url:
+            cluster_config = _fetch_cluster_config(coordinator_url)
+        else:
+            raise RuntimeError("CLUSTER_CONFIG environment variable is required")
     port_env = os.environ.get("PORT")
     return create_app(
         role=role,
@@ -419,11 +419,13 @@ def _create_app_from_env() -> FastAPI:
         data_dir=os.environ.get("DATA_DIR", ".data/typesense_lite"),
         bind_host=os.environ.get("HOST"),
         bind_port=int(port_env) if port_env else None,
-        coordinator_url=os.environ.get("COORDINATOR_URL"),
+        coordinator_url=coordinator_url,
     )
 
 
-if os.environ.get("CLUSTER_CONFIG"):
+if os.environ.get("CLUSTER_CONFIG") or (
+    os.environ.get("ROLE") == "node" and os.environ.get("COORDINATOR_URL")
+):
     app = _create_app_from_env()
 else:
     app = FastAPI(title="Typesense Lite")
