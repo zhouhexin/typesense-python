@@ -11,7 +11,6 @@ import argparse
 import json
 import signal
 import subprocess
-import sys
 from pathlib import Path
 
 from typesense_lite.run_node import RunNodeSpec, spawn_process
@@ -96,11 +95,24 @@ def _start_process(
 
 
 def _local_demo_env() -> dict[str, str]:
+    os = __import__("os")
     src = str(ROOT / "src")
-    existing = __import__("os").environ.get("PYTHONPATH")
+    existing = os.environ.get("PYTHONPATH")
+    no_proxy = _merge_no_proxy(os.environ.get("NO_PROXY", ""))
+    env = {"NO_PROXY": no_proxy, "no_proxy": no_proxy}
     if existing:
-        return {"PYTHONPATH": __import__("os").pathsep.join([src, existing])}
-    return {"PYTHONPATH": src}
+        env["PYTHONPATH"] = os.pathsep.join([src, existing])
+    else:
+        env["PYTHONPATH"] = src
+    return env
+
+
+def _merge_no_proxy(existing: str) -> str:
+    entries = [item.strip() for item in existing.split(",") if item.strip()]
+    for required in ("127.0.0.1", "localhost"):
+        if required not in entries:
+            entries.append(required)
+    return ",".join(entries)
 
 
 def _stop_processes(processes: list[subprocess.Popen[bytes]]) -> None:

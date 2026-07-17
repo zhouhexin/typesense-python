@@ -31,6 +31,13 @@ def test_make_cross_machine_client_applies_default_timeout() -> None:
 
     assert client.timeout.connect == 2.0
     assert client.timeout.read == 5.0
+    assert client._trust_env is False
+
+
+def test_make_cross_machine_client_can_explicitly_enable_environment() -> None:
+    client = make_cross_machine_client(trust_env=True)
+
+    assert client._trust_env is True
 
 
 def test_make_cross_machine_client_respects_explicit_timeout() -> None:

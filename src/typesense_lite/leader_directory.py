@@ -30,8 +30,11 @@ class LeaderDirectory:
         return discovered
 
     async def refresh(self, shard_id: int) -> NodeInfo | None:
+        voters = {
+            node.id: node for node in self.cluster.get_shard_voters(shard_id)
+        }
         hinted_leader_id: str | None = None
-        for node in self.cluster.get_shard_voters(shard_id):
+        for node in voters.values():
             try:
                 response = await get_with_retry(
                     self.client,
@@ -48,13 +51,26 @@ class LeaderDirectory:
             if isinstance(leader_id, str) and leader_id:
                 hinted_leader_id = leader_id
 
-        if hinted_leader_id and hinted_leader_id in self.cluster.nodes:
-            leader = self.cluster.nodes[hinted_leader_id]
-            self._leaders[shard_id] = leader
-            return leader
+        if hinted_leader_id and hinted_leader_id in voters:
+            leader = voters[hinted_leader_id]
+            if await self._verify_leader(shard_id, leader):
+                self._leaders[shard_id] = leader
+                return leader
 
         self._leaders.pop(shard_id, None)
         return None
 
     def invalidate(self, shard_id: int) -> None:
         self._leaders.pop(shard_id, None)
+
+    async def _verify_leader(self, shard_id: int, node: NodeInfo) -> bool:
+        try:
+            response = await get_with_retry(
+                self.client,
+                f"{node.url}/internal/raft/{shard_id}/state",
+            )
+        except httpx.HTTPError:
+            return False
+
+        payload: dict[str, Any] = response.json()
+        return payload.get("role") == "leader"

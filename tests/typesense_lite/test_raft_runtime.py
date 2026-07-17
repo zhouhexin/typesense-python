@@ -181,7 +181,7 @@ async def test_heartbeat_reaches_healthy_peer_without_waiting_for_slow_peer(
         if request.url.path.endswith("/request_vote"):
             return httpx.Response(200, json={"term": 1, "vote_granted": True})
         if request.url.host == "node-2":
-            await anyio.sleep(0.2)
+            await anyio.sleep(1.0)
             return httpx.Response(503)
         healthy_peer_contacted.set()
         return httpx.Response(200, json={"term": 1, "success": True, "match_index": 0})
@@ -197,10 +197,12 @@ async def test_heartbeat_reaches_healthy_peer_without_waiting_for_slow_peer(
     )
     await runtime.start_election()
 
+    started_at = time.monotonic()
     heartbeat = asyncio.create_task(runtime.send_heartbeat())
     with anyio.fail_after(0.05):
         await healthy_peer_contacted.wait()
     await heartbeat
+    assert time.monotonic() - started_at < 0.5
 
 
 @pytest.mark.asyncio
@@ -573,3 +575,83 @@ async def test_leader_repairs_conflicting_follower_log(tmp_path) -> None:
     assert [entry.term for entry in follower.core.log] == [1, 1]
     assert follower.core.log[1].command["document"]["id"] == "book-2"
     assert follower.state()["last_applied"] == 2
+
+
+@pytest.mark.asyncio
+async def test_follower_recovery_state_moves_from_recovering_to_healthy(tmp_path) -> None:
+    applied: list[dict] = []
+    runtime = RaftRuntime(
+        node_id="node-2",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path,
+        peer_urls={"node-1": "http://node-1", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503))
+        ),
+        apply_command=lambda command: applied.append(command) or {"ok": True},
+    )
+
+    assert runtime.recovery_state()["status"] == "recovering"
+    first = await runtime.handle_append_entries(
+        {
+            "term": 1,
+            "leader_id": "node-1",
+            "prev_log_index": 0,
+            "prev_log_term": 0,
+            "entries": [
+                {
+                    "index": 1,
+                    "term": 1,
+                    "command": {
+                        "type": "add_document",
+                        "collection": "books",
+                        "document": {"id": "book-1"},
+                    },
+                }
+            ],
+            "leader_commit": 1,
+        }
+    )
+
+    assert first["success"] is True
+    assert runtime.recovery_state()["status"] == "catching_up"
+    second = await runtime.handle_append_entries(
+        {
+            "term": 1,
+            "leader_id": "node-1",
+            "prev_log_index": 1,
+            "prev_log_term": 1,
+            "entries": [],
+            "leader_commit": 1,
+        }
+    )
+
+    recovery = runtime.recovery_state()
+    assert second["success"] is True
+    assert recovery["status"] == "healthy"
+    assert recovery["ready"] is True
+    assert recovery["leader_last_log_index"] == 1
+    assert recovery["leader_commit_index"] == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_failure_is_reported(tmp_path) -> None:
+    runtime = RaftRuntime(
+        node_id="node-2",
+        shard_id=0,
+        members=["node-1", "node-2", "node-3"],
+        data_dir=tmp_path,
+        peer_urls={"node-1": "http://node-1", "node-3": "http://node-3"},
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(503))
+        ),
+        apply_command=lambda command: {"ok": True},
+    )
+
+    runtime._mark_recovery_failed(RuntimeError("disk read failed"))
+
+    recovery = runtime.recovery_state()
+    assert recovery["status"] == "failed"
+    assert recovery["ready"] is False
+    assert recovery["error"] == "disk read failed"

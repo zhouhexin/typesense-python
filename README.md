@@ -57,6 +57,91 @@ voter，可以容忍任意 1 个 voter 暂时不可用。当 follower 离线期�
 写入，恢复后 leader 会通过 heartbeat 自动推送缺失日志，直到 follower
 的 `last_log_index`、`commit_index` 和 `last_applied` 追上 leader。
 
+### 高级搜索
+
+基础调用 `?q=关键词&limit=10` 保持兼容。搜索接口还支持以下可选参数：
+
+| 参数 | 作用 | 示例 |
+|---|---|---|
+| `query_by` | 指定参与搜索的字段 | `title,body` |
+| `query_by_weights` | 按 `query_by` 顺序设置字段权重 | `3,1` |
+| `prefix` | 开启前缀匹配 | `true` |
+| `num_typos` | 允许的编辑距离，范围 0-2 | `1` |
+| `filter_by` | 字段过滤，多个条件用 `&&` | `category:tech&&year:>=2024` |
+| `sort_by` | 字段排序 | `popularity:desc` |
+| `facet_by` | 返回字段聚合计数 | `category` |
+| `page` / `per_page` | 全局分页 | `page=1&per_page=20` |
+| `highlight_fields` | 返回带 `<mark>` 的命中片段 | `title,body` |
+
+```bash
+curl --get 'http://127.0.0.1:9100/collections/books/documents/search' \
+  --data-urlencode 'q=分布式搜索' \
+  --data-urlencode 'query_by=title,body' \
+  --data-urlencode 'query_by_weights=3,1' \
+  --data-urlencode 'filter_by=category:tech' \
+  --data-urlencode 'sort_by=popularity:desc' \
+  --data-urlencode 'facet_by=category' \
+  --data-urlencode 'highlight_fields=title,body'
+```
+
+搜索页 `http://127.0.0.1:9100/search` 已提供对应控件；文档增删改、文件
+上传仍在 `/admin`，集群操作仍在 `/cluster-console`。
+
+### 节点恢复和副本重建
+
+data node 通过 `GET /internal/recovery/state` 汇报每个 shard 的恢复状态：
+`recovering`、`catching_up`、`rebuilding`、`validating`、`healthy` 或
+`failed`。`/health` 继续用 `ok: true` 表示进程存活，并额外返回
+`ready`、`status` 和 `error`，因此部署脚本的存活探测保持兼容。
+
+普通短暂离线优先由 Raft 日志自动 catch-up。若本地文档存储缺失、校验
+不一致或日志无法完整恢复，follower 会从当前 Raft leader 获取 shard
+快照，校验 manifest、term、snapshot index 和 SHA-256 checksum 后原子
+替换本地数据，再继续接收快照之后的增量日志。快照来源不会使用静态
+primary，也不允许重建当前 leader。
+
+Cluster Console 会显示 recovery、ready、last log、commit、lag 和错误，
+并只为非 leader voter 提供 `Rebuild` 操作。也可以调用 coordinator：
+
+```bash
+curl -X POST \
+  http://127.0.0.1:9100/cluster/shards/0/members/node-3/rebuild
+```
+
+`Repair` 与 `Rebuild` 的用途不同：`Repair` 按文档 ID 补齐普通副本差异；
+`Rebuild` 从 leader 安装整个 shard 快照，适用于数据目录丢失或状态机
+checksum 不一致。
+
+### 故障和恢复演示
+
+先启动默认集群，再运行演示。三个脚本默认只打印目标，涉及终止进程或
+重建时必须显式传入 `--yes`：
+
+```bash
+.venv/bin/python examples/distributed_lite/failover_demo.py --yes
+.venv/bin/python examples/distributed_lite/restart_node_demo.py --yes
+.venv/bin/python examples/distributed_lite/replica_rebuild_demo.py --yes
+```
+
+- `failover_demo.py`：终止一个 shard leader，等待重新选举，并验证新 leader 写入。
+- `restart_node_demo.py`：停止 follower，离线期间写入，重启同一节点并验证 catch-up。
+- `replica_rebuild_demo.py`：通过 coordinator 对 follower 执行 leader-aware 快照重建。
+
+如果节点已经宕机，只恢复该节点而不重启整个集群，可以在新终端中执行：
+
+```bash
+.venv/bin/python examples/distributed_lite/recover_node.py \
+  --node-id node-1 \
+  --data-dir .data/typesense_lite
+```
+
+`--data-dir` 必须与启动集群时使用的目录一致。脚本会复用持久化数据，等待
+节点健康且所有本地 shard 完成 Raft 日志追赶，然后持续保持该节点运行。
+恢复完成后不要关闭这个终端；需要停止该节点时按 `Ctrl+C`。
+
+课堂展示可按 [三节点 Raft 故障转移演示指南](docs/raft-failover-demo-guide.md)
+完成环境检查、Leader 宕机、重新选举、写入验证和集群恢复。
+
 ## Typesense Lite 多机部署
 
 单机 demo 之外，`typesense_lite` 也可以部署到多台真实机器上，靠
@@ -199,6 +284,10 @@ coordinator 在内存里维护 `alive_nodes`；30s 内没收到心跳就视作�
 | deploy 卡在等待 `/health` | `deploy_cluster.py logs` 看 coordinator 日志；多半是 9100/9101 被防火墙挡 |
 | `alive` 集合少了节点 | 检查 `COORDINATOR_URL` 是否能从该节点机器解析到 coordinator；`logs` 看 `register` 报错 |
 | Raft 选举慢 | 调 `RaftRuntime(election_timeout=...)`；inventory 里给 coordinator_url 加 LB |
+| 节点 `ok=true` 但 `ready=false` | 查看 `/internal/recovery/state` 和 `/cluster/raft` 的 lag/error；节点仍存活但尚未追平 |
+| 本地三个节点同时返回 `502 Bad Gateway` | 停止并重启集群；内部客户端默认忽略环境代理，启动器会把 `127.0.0.1,localhost` 加入 `NO_PROXY`。旧进程不会自动应用该修复 |
+| follower 长期 `catching_up` | 检查 data node 之间的 Raft 端口；必要时在 Cluster Console 对该 follower 执行 Rebuild |
+| Rebuild 返回 leader 错误 | 刷新 `/cluster/raft`，确认目标是当前 follower；系统禁止重建 leader |
 | ssh 报错 | `ssh -o StrictHostKeyChecking=accept-new user@host echo ok` 先自测 |
 | 想清空重启 | `deploy_cluster.py stop` 然后删 `data_dir/*.jsonl` 与 `data_dir/raft/` |
 

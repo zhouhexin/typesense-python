@@ -48,8 +48,8 @@ async def test_all_nodes_healthy_shards_healthy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_primary_failed_replica_ok_degraded() -> None:
-    """Primary failed but replica healthy -> shard status is 'degraded'."""
+async def test_one_of_two_voters_down_is_unavailable() -> None:
+    """A two-voter shard cannot reach majority with one voter down."""
     cluster = ClusterMap.from_dict(CONFIG)
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -64,14 +64,12 @@ async def test_primary_failed_replica_ok_degraded() -> None:
     assert report.nodes["node-1"].ok is False
     assert report.nodes["node-2"].ok is True
 
-    # Shard 0 is degraded (primary down, replica up)
-    assert report.shards[0].status == "degraded"
+    assert report.shards[0].status == "unavailable"
     assert report.shards[0].primary.ok is False
     assert report.shards[0].replicas[0].node == "node-2"
     assert report.shards[0].replicas[0].ok is True
 
-    # Shard 1 is still healthy (primary up)
-    assert report.shards[1].status == "healthy"
+    assert report.shards[1].status == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -125,7 +123,7 @@ async def test_health_response_ok_false_marks_node_down() -> None:
 
     assert report.nodes["node-1"].ok is False
     assert report.nodes["node-1"].error == "not ready"
-    assert report.shards[0].status == "degraded"
+    assert report.shards[0].status == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -192,8 +190,7 @@ async def test_replica_becomes_unavailable_when_node_down() -> None:
     assert report.shards[0].replicas[0].node == "node-2"
     assert report.shards[0].replicas[0].ok is False
 
-    # Shard is still healthy because primary is up
-    assert report.shards[0].status == "healthy"
+    assert report.shards[0].status == "unavailable"
 
 
 def test_node_health_dataclass() -> None:
@@ -256,3 +253,94 @@ def test_cluster_health_report_to_dict_structure() -> None:
     assert "replicas" in shard_data
     assert shard_data["primary"]["node"] == "node-1"
     assert shard_data["primary"]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_cluster_health_is_degraded_during_recovery() -> None:
+    config = {
+        "coordinator": {"host": "127.0.0.1", "port": 9100},
+        "shard_count": 1,
+        "nodes": [
+            {"id": "node-1", "host": "127.0.0.1", "port": 9101},
+            {"id": "node-2", "host": "127.0.0.1", "port": 9102},
+            {"id": "node-3", "host": "127.0.0.1", "port": 9103},
+        ],
+        "shards": {
+            "0": {"primary": "node-1", "replicas": ["node-2", "node-3"]},
+        },
+    }
+    cluster = ClusterMap.from_dict(config)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"ok": True})
+        if request.url.path == "/internal/recovery/state":
+            status = "catching_up" if request.url.port == 9103 else "healthy"
+            return httpx.Response(
+                200,
+                json={
+                    "status": status,
+                    "ready": status == "healthy",
+                    "shards": {
+                        "0": {
+                            "status": status,
+                            "ready": status == "healthy",
+                        }
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        report = await collect_cluster_health(cluster, client)
+
+    payload = report.to_dict()
+    assert payload["status"] == "degraded"
+    assert payload["ok"] is False
+    assert report.nodes["node-3"].status == "catching_up"
+    assert report.shards[0].status == "degraded"
+    assert report.shards[0].replicas[1].ready is False
+
+
+@pytest.mark.asyncio
+async def test_cluster_health_returns_healthy_after_recovery() -> None:
+    config = {
+        "coordinator": {"host": "127.0.0.1", "port": 9100},
+        "shard_count": 1,
+        "nodes": [
+            {"id": "node-1", "host": "127.0.0.1", "port": 9101},
+            {"id": "node-2", "host": "127.0.0.1", "port": 9102},
+            {"id": "node-3", "host": "127.0.0.1", "port": 9103},
+        ],
+        "shards": {
+            "0": {"primary": "node-1", "replicas": ["node-2", "node-3"]},
+        },
+    }
+    cluster = ClusterMap.from_dict(config)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"ok": True})
+        if request.url.path == "/internal/recovery/state":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "healthy",
+                    "ready": True,
+                    "shards": {
+                        "0": {
+                            "status": "healthy",
+                            "ready": True,
+                        }
+                    },
+                },
+            )
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        report = await collect_cluster_health(cluster, client)
+
+    payload = report.to_dict()
+    assert payload["status"] == "healthy"
+    assert payload["ok"] is True
+    assert report.shards[0].status == "healthy"

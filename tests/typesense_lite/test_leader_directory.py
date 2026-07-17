@@ -43,3 +43,26 @@ async def test_discovers_shard_leader() -> None:
     leader = await directory.get_leader(0)
 
     assert leader.id == "node-2"
+
+
+@pytest.mark.asyncio
+async def test_ignores_unavailable_hinted_leader() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.port == 9102:
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            json={
+                "node": "node-1",
+                "role": "follower",
+                "current_term": 3,
+                "leader_id": "node-2",
+            },
+        )
+
+    cluster = ClusterMap.from_dict(CONFIG)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        directory = LeaderDirectory(cluster, client)
+        leader = await directory.refresh(0)
+
+    assert leader is None

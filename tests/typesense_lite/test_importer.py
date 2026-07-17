@@ -48,6 +48,22 @@ def test_parse_docx_upload_as_single_document() -> None:
     ]
 
 
+def test_parse_docx_upload_preserves_chinese_filename_in_document_id() -> None:
+    documents = parse_upload(
+        "操作系统.docx",
+        make_docx("操作系统负责管理计算机硬件和软件资源"),
+    )
+
+    assert documents == [
+        {
+            "id": "操作系统-docx",
+            "title": "操作系统.docx",
+            "body": "操作系统负责管理计算机硬件和软件资源",
+            "source": "操作系统.docx",
+        }
+    ]
+
+
 def test_parse_pdf_upload_as_single_document() -> None:
     documents = parse_upload("Report.pdf", make_pdf("PDF searchable body"))
 

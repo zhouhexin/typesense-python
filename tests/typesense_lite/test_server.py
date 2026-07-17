@@ -123,6 +123,27 @@ def test_data_node_health() -> None:
     assert response.json()["role"] == "node"
 
 
+def test_data_node_reports_recovery_state_without_changing_liveness(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    client = TestClient(app)
+
+    health = client.get("/health")
+    recovery = client.get("/internal/recovery/state")
+
+    assert health.status_code == 200
+    assert health.json()["ok"] is True
+    assert health.json()["ready"] is True
+    assert recovery.status_code == 200
+    assert recovery.json()["node_id"] == "node-1"
+    assert recovery.json()["status"] == "healthy"
+    assert recovery.json()["shards"]["0"]["ready"] is True
+
+
 def test_data_node_internal_write_and_search(tmp_path) -> None:
     app = create_app(
         role="node",
@@ -145,6 +166,59 @@ def test_data_node_internal_write_and_search(tmp_path) -> None:
     assert write.json()["id"] == "doc-1"
     assert search.status_code == 200
     assert search.json()["hits"][0]["id"] == "doc-1"
+
+
+def test_data_node_internal_search_supports_advanced_query_params(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    client = TestClient(app)
+    client.post(
+        "/internal/shards/0/collections/books/documents",
+        json={
+            "id": "doc-1",
+            "title": "Distributed search",
+            "body": "Search engines split documents",
+            "category": "tech",
+            "popularity": 20,
+        },
+    )
+    client.post(
+        "/internal/shards/0/collections/books/documents",
+        json={
+            "id": "doc-2",
+            "title": "Search basics",
+            "body": "Distributed systems",
+            "category": "tech",
+            "popularity": 5,
+        },
+    )
+
+    response = client.get(
+        "/internal/shards/0/collections/books/search",
+        params={
+            "q": "distributed search",
+            "query_by": "title,body",
+            "query_by_weights": "3,1",
+            "filter_by": "category:tech",
+            "facet_by": "category",
+            "highlight_fields": "title,body",
+            "page": 1,
+            "per_page": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["found"] == 2
+    assert payload["page"] == 1
+    assert payload["per_page"] == 1
+    assert payload["hits"][0]["id"] == "doc-1"
+    assert payload["hits"][0]["highlights"][0]["field"] == "title"
+    assert payload["facet_counts"][0]["field_name"] == "category"
 
 
 def test_data_node_internal_document_management(tmp_path) -> None:
@@ -323,6 +397,36 @@ def test_data_node_exposes_raft_commands(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert response.json()["result"]["id"] == "doc-1"
+
+
+def test_data_node_exports_leader_snapshot_and_rejects_leader_rebuild(tmp_path) -> None:
+    app = create_app(
+        role="node",
+        cluster_config=CONFIG,
+        node_id="node-1",
+        data_dir=tmp_path,
+    )
+    with TestClient(app) as client:
+        command = client.post(
+            "/internal/raft/0/commands",
+            json={
+                "type": "add_document",
+                "collection": "books",
+                "document": {"id": "doc-1", "title": "Snapshot"},
+            },
+        )
+        manifest = client.get("/internal/shards/0/snapshot/manifest")
+        snapshot = client.get("/internal/shards/0/snapshot/export")
+        rebuild = client.post("/internal/shards/0/rebuild")
+
+    assert command.status_code == 200
+    assert manifest.status_code == 200
+    assert manifest.json()["source_role"] == "leader"
+    assert manifest.json()["document_count"] == 1
+    assert snapshot.status_code == 200
+    assert snapshot.json()["manifest"]["checksum"] == manifest.json()["checksum"]
+    assert rebuild.status_code == 409
+    assert "leader cannot be rebuilt" in rebuild.json()["detail"]
 
 
 def test_coordinator_public_document_routes_with_single_node(tmp_path) -> None:
@@ -521,6 +625,61 @@ def test_coordinator_serves_search_page_at_search_path() -> None:
     assert "Typesense Lite Search" in response.text
 
 
+def test_search_page_includes_advanced_search_controls() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/search")
+
+    assert response.status_code == 200
+    assert "Search Keywords" in response.text
+    assert 'placeholder="Enter keywords, e.g. 操作系统"' in response.text
+    assert response.text.count("<input") == 2
+    assert 'name="query_by_weights"' not in response.text
+    assert 'type="number"' not in response.text
+    assert '<select id="collection-select" name="collection">' in response.text
+    assert '<select name="query_by">' in response.text
+    assert "Field Filter" in response.text
+    assert '<select name="filter_by">' in response.text
+    assert '<select name="sort_by">' in response.text
+    assert '<select name="facet_by">' in response.text
+    assert '<select name="highlight_fields">' in response.text
+    assert '<select name="per_page">' in response.text
+    assert '<select name="num_typos">' in response.text
+    assert 'name="prefix"' in response.text
+    assert 'id="advanced-options"' in response.text
+    assert 'id="preset-strip"' in response.text
+    assert 'data-preset="prefix"' in response.text
+    assert 'data-preset="fuzzy"' in response.text
+    assert "applyPreset" in response.text
+    assert "weightsForScope" in response.text
+    assert "fetch('/collections')" in response.text
+    assert 'id="previous-page"' in response.text
+    assert 'id="next-page"' in response.text
+    assert "function changePage(offset)" in response.text
+    assert 'id="summary"' in response.text
+    assert 'id="facets"' in response.text
+    assert "renderFacets" in response.text
+    assert "const documentTitle = hit.document?.title || hit.document?.source || hit.id" in response.text
+    assert "Document ID: ${escapeHtml(hit.id)}" in response.text
+    assert "const sourceName = hit.document?.source" in response.text
+    assert 'id="admin-search-form"' not in response.text
+
+
+def test_search_page_prevents_page_level_horizontal_overflow() -> None:
+    app = create_app(role="coordinator", cluster_config=CONFIG)
+    client = TestClient(app)
+
+    response = client.get("/search")
+
+    assert response.status_code == 200
+    assert "overflow-x: hidden" in response.text
+    assert "overflow-wrap: anywhere" in response.text
+    assert "white-space: pre-wrap" in response.text
+    assert ".hit-head > *" in response.text
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in response.text
+
+
 def test_coordinator_serves_admin_page() -> None:
     app = create_app(role="coordinator", cluster_config=CONFIG)
     client = TestClient(app)
@@ -529,14 +688,16 @@ def test_coordinator_serves_admin_page() -> None:
 
     assert response.status_code == 200
     assert "Typesense Lite Admin" in response.text
-    assert "Cluster" in response.text
+    assert "<h2>Cluster</h2>" not in response.text
+    assert "Cluster Health" not in response.text
     assert "Add Document" in response.text
     assert "Import Documents" in response.text
     assert "Collections" in response.text
     assert "Documents" in response.text
     assert 'type="file"' in response.text
     assert ".pdf,.docx" in response.text
-    assert "fetch('/cluster')" in response.text
+    assert "fetch('/cluster')" not in response.text
+    assert "fetch('/cluster/health')" not in response.text
     assert "fetch('/collections')" in response.text
     assert "/documents/import" in response.text
     assert "/documents/upload" in response.text
@@ -564,9 +725,19 @@ def test_coordinator_serves_cluster_console_page() -> None:
     assert "/repair" in response.text
     assert "commit_index" in response.text
     assert "last_applied" in response.text
-    assert "static primary mode" in response.text
+    assert "Raft election" in response.text
+    assert "recovery_status" in response.text
+    assert "leader_commit_index" in response.text
+    assert "renderElectionStatusFromRaft" in response.text
+    assert 'class="secondary rebuild-member"' in response.text
+    assert "/members/${encodeURIComponent(nodeId)}/rebuild" in response.text
+    assert "rebuildMember" in response.text
     assert 'id="check-consistency"' in response.text
     assert 'id="repair-collection"' in response.text
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in response.text
+    assert response.text.count('class="panel full-span"') == 2
+    assert 'class="table-scroll"' in response.text
+    assert 'class="raft-table"' in response.text
 
 
 def test_admin_page_includes_consistency_and_repair_controls() -> None:
@@ -598,30 +769,35 @@ def test_admin_page_does_not_shadow_dom_document_when_rendering_documents() -> N
     assert "documents.forEach((document)" not in response.text
 
 
-def test_admin_page_includes_cluster_health_panel() -> None:
-    """Admin page includes Cluster Health panel with refresh button."""
+def test_admin_page_uses_single_column_without_cluster_panels() -> None:
     app = create_app(role="coordinator", cluster_config=CONFIG)
     client = TestClient(app)
 
     response = client.get("/admin")
 
     assert response.status_code == 200
-    assert "Cluster Health" in response.text
-    assert 'id="refresh-health"' in response.text
-    assert "fetch('/cluster/health')" in response.text
-    assert 'id="health-nodes"' in response.text
-    assert 'id="health-shards"' in response.text
+    assert "grid-template-columns: minmax(0, 1fr)" in response.text
+    assert "<h2>Cluster</h2>" not in response.text
+    assert "Cluster Health" not in response.text
+    assert 'id="refresh-cluster"' not in response.text
+    assert 'id="refresh-health"' not in response.text
+    assert "fetch('/cluster')" not in response.text
+    assert "fetch('/cluster/health')" not in response.text
 
 
-def test_admin_page_maps_unavailable_shards_to_unavailable_status() -> None:
+def test_admin_page_orders_collections_first_and_repair_footer_last() -> None:
     app = create_app(role="coordinator", cluster_config=CONFIG)
     client = TestClient(app)
 
     response = client.get("/admin")
 
     assert response.status_code == 200
-    assert 'status.status === "unavailable"' in response.text
-    assert 'status-unavailable' in response.text
+    collections_position = response.text.index("<h2>Collections</h2>")
+    add_position = response.text.index("<h2>Add Document</h2>")
+    detail_position = response.text.index("<h2>Document Detail</h2>")
+    repair_position = response.text.index("<h2>Consistency & Repair</h2>")
+    assert collections_position < add_position < detail_position < repair_position
+    assert '<footer class="panel admin-footer">' in response.text
 
 
 def test_data_node_does_not_serve_web_pages() -> None:

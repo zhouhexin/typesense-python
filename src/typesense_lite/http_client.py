@@ -35,7 +35,11 @@ def make_cross_machine_client(
     timeout: httpx.Timeout | None = None,
     **kwargs: Any,
 ) -> httpx.AsyncClient:
-    """Build an :class:`httpx.AsyncClient` with cross-machine defaults."""
+    """Build a direct cluster client with cross-machine timeout defaults."""
+    # Cluster members are trusted, explicitly configured endpoints. Routing
+    # them through a workstation HTTP proxy can turn healthy local nodes into
+    # misleading 502 responses.
+    kwargs.setdefault("trust_env", False)
     return httpx.AsyncClient(
         timeout=timeout if timeout is not None else cross_machine_timeout(),
         **kwargs,

@@ -45,7 +45,7 @@
         align-items: center;
         justify-content: space-between;
         gap: 18px;
-        max-width: 1240px;
+        max-width: 1400px;
         margin: 0 auto;
         padding: 22px 24px;
       }
@@ -93,9 +93,10 @@
 
       main {
         display: grid;
-        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 18px;
-        max-width: 1240px;
+        align-items: start;
+        max-width: 1400px;
         margin: 0 auto;
         padding: 20px 24px 32px;
       }
@@ -107,11 +108,16 @@
       }
 
       .panel {
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--panel);
         box-shadow: var(--shadow);
         padding: 16px;
+      }
+
+      .full-span {
+        grid-column: 1 / -1;
       }
 
       .section-head {
@@ -275,6 +281,15 @@
         margin-top: 12px;
       }
 
+      .table-scroll {
+        max-width: 100%;
+        overflow-x: auto;
+      }
+
+      .raft-table {
+        min-width: 1080px;
+      }
+
       th,
       td {
         border-bottom: 1px solid var(--line);
@@ -312,7 +327,7 @@
       <div class="header-inner">
         <div>
           <h1>Typesense Lite Cluster Console</h1>
-          <p class="subtitle">Monitor node health, static primaries, and replica repair.</p>
+          <p class="subtitle">Monitor node health, Raft elections, recovery, and replica repair.</p>
         </div>
         <nav>
           <a href="/search">Search</a>
@@ -366,39 +381,36 @@
         <section class="panel">
           <div class="section-head">
             <h2>Election Status</h2>
-            <span class="badge status-degraded">static primary mode</span>
+            <span class="badge status-healthy">Raft election</span>
           </div>
-          <p class="subtitle">
-            This cluster uses static primary placement. Automatic leader election is not enabled.
-          </p>
           <div id="election-status" class="grid" style="margin-top: 12px"></div>
         </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>Raft Status</h2>
-            <button class="secondary" id="refresh-raft" type="button">Refresh</button>
-          </div>
-          <div id="raft-status" class="grid"></div>
-          <div id="raft-message" class="message" hidden></div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>Consistency & Repair</h2>
-          </div>
-          <div class="toolbar">
-            <input id="collection-input" value="books" autocomplete="off" />
-            <div class="actions">
-              <button id="check-consistency" type="button">Check Consistency</button>
-              <button class="secondary" id="repair-collection" type="button">Repair</button>
-            </div>
-          </div>
-          <div id="repair-message" class="message" hidden></div>
-          <div id="consistency-results"></div>
-          <div id="repair-results"></div>
-        </section>
       </div>
+
+      <section class="panel full-span">
+        <div class="section-head">
+          <h2>Raft Status</h2>
+          <button class="secondary" id="refresh-raft" type="button">Refresh</button>
+        </div>
+        <div id="raft-status" class="grid"></div>
+        <div id="raft-message" class="message" hidden></div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="section-head">
+          <h2>Consistency & Repair</h2>
+        </div>
+        <div class="toolbar">
+          <input id="collection-input" value="books" autocomplete="off" />
+          <div class="actions">
+            <button id="check-consistency" type="button">Check Consistency</button>
+            <button class="secondary" id="repair-collection" type="button">Repair</button>
+          </div>
+        </div>
+        <div id="repair-message" class="message" hidden></div>
+        <div id="consistency-results"></div>
+        <div id="repair-results"></div>
+      </section>
     </main>
 
     <script>
@@ -460,6 +472,7 @@
           const response = await fetch('/cluster/raft');
           const raft = await readJson(response);
           renderRaftStatus(raft);
+          renderElectionStatusFromRaft(raft);
         } catch (error) {
           raftStatusEl.innerHTML = "";
           showMessage(raftMessageEl, error.message, true);
@@ -605,12 +618,34 @@
           <div class="election-row">
             <div class="row">
               <h3>Shard ${escapeHtml(shardId)}</h3>
-              <span class="badge status-degraded">static primary mode</span>
+              <span class="badge status-degraded">loading Raft state</span>
             </div>
             <div class="meta">
-              Current primary: ${escapeHtml(placement.primary)}<br />
-              Election term: not available<br />
-              Automatic promotion: disabled
+              Bootstrap primary: ${escapeHtml(placement.primary)}<br />
+              Voters: ${escapeHtml([placement.primary, ...(placement.replicas || [])].join(", "))}
+            </div>
+          </div>
+        `).join("");
+      }
+
+      function renderElectionStatusFromRaft(raft) {
+        const entries = Object.entries(raft.shards || {});
+        if (!entries.length) {
+          electionStatusEl.innerHTML = '<div class="message">No Raft groups found.</div>';
+          return;
+        }
+        electionStatusEl.innerHTML = entries.map(([shardId, shardInfo]) => `
+          <div class="election-row">
+            <div class="row">
+              <h3>Shard ${escapeHtml(shardId)}</h3>
+              <span class="badge ${shardInfo.leader ? "status-healthy" : "status-unavailable"}">
+                ${escapeHtml(shardInfo.leader || "no leader")}
+              </span>
+            </div>
+            <div class="meta">
+              Current leader: ${escapeHtml(shardInfo.leader || "none")}<br />
+              Election term: ${escapeHtml(shardInfo.term ?? "unknown")}<br />
+              Voters: ${escapeHtml(Object.keys(shardInfo.members || {}).join(", ") || "none")}
             </div>
           </div>
         `).join("");
@@ -629,8 +664,21 @@
               <td>${escapeHtml(nodeId)}</td>
               <td>${escapeHtml(member.role || "unknown")}</td>
               <td>${escapeHtml(member.term ?? "")}</td>
+              <td>${escapeHtml(member.recovery_status || "unknown")}</td>
+              <td>${member.ready === true ? "yes" : "no"}</td>
+              <td>${escapeHtml(member.last_log_index ?? "")}</td>
               <td>${escapeHtml(member.commit_index ?? "")}</td>
               <td>${escapeHtml(member.last_applied ?? "")}</td>
+              <td>${escapeHtml(recoveryLag(member))}</td>
+              <td>${escapeHtml(member.recovery_error || member.error || "")}</td>
+              <td>${escapeHtml(member.rebuild?.status || "")}</td>
+              <td>
+                ${
+                  member.role !== "leader" && member.role !== "unavailable"
+                    ? `<button class="secondary rebuild-member" type="button" data-shard-id="${escapeHtml(shardId)}" data-node-id="${escapeHtml(nodeId)}">Rebuild</button>`
+                    : "-"
+                }
+              </td>
             </tr>
           `).join("");
           return `
@@ -645,21 +693,67 @@
                 Leader: ${escapeHtml(shardInfo.leader || "none")}<br />
                 Term: ${escapeHtml(shardInfo.term ?? "")}
               </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Node</th>
-                    <th>Role</th>
-                    <th>Term</th>
-                    <th>commit_index</th>
-                    <th>last_applied</th>
-                  </tr>
-                </thead>
-                <tbody>${memberRows}</tbody>
-              </table>
+              <div class="table-scroll">
+                <table class="raft-table">
+                  <thead>
+                    <tr>
+                      <th>Node</th>
+                      <th>Role</th>
+                      <th>Term</th>
+                      <th>Recovery</th>
+                      <th>Ready</th>
+                      <th>last_log</th>
+                      <th>commit_index</th>
+                      <th>last_applied</th>
+                      <th>Lag</th>
+                      <th>Error</th>
+                      <th>Rebuild</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>${memberRows}</tbody>
+                </table>
+              </div>
             </div>
           `;
         }).join("");
+        document.querySelectorAll(".rebuild-member").forEach((button) => {
+          button.addEventListener("click", () => rebuildMember(button));
+        });
+      }
+
+      function recoveryLag(member) {
+        if (member.leader_commit_index == null || member.commit_index == null) {
+          return "";
+        }
+        return Math.max(0, Number(member.leader_commit_index) - Number(member.commit_index));
+      }
+
+      async function rebuildMember(button) {
+        const shardId = button.dataset.shardId;
+        const nodeId = button.dataset.nodeId;
+        if (!window.confirm(`Rebuild ${nodeId} for shard ${shardId}?`)) {
+          return;
+        }
+        button.disabled = true;
+        hideMessage(raftMessageEl);
+        try {
+          const response = await fetch(
+            `/cluster/shards/${encodeURIComponent(shardId)}/members/${encodeURIComponent(nodeId)}/rebuild`,
+            { method: "POST" }
+          );
+          const payload = await readJson(response);
+          showMessage(
+            raftMessageEl,
+            `Rebuilt ${nodeId} from ${payload.source_leader || "leader"}.`
+          );
+          await loadRaft();
+          await loadHealth();
+        } catch (error) {
+          showMessage(raftMessageEl, error.message, true);
+        } finally {
+          button.disabled = false;
+        }
       }
 
       function renderConsistencyResults(payload) {

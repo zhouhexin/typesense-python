@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import httpx
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -12,11 +13,13 @@ from fastapi.responses import HTMLResponse
 
 from .cluster import ClusterConfig, ClusterMap
 from .coordinator import Coordinator
-from .http_client import cross_machine_timeout, make_cross_machine_client
+from .http_client import cross_machine_timeout, get_with_retry, make_cross_machine_client
 from .importer import parse_upload
 from .node import SearchNode
 from .node_registrar import NodeRegistrar
 from .raft_runtime import RaftRuntime
+from .rebuild import build_snapshot_payload, validate_snapshot_payload
+from .recovery import NodeRecoveryState, shard_is_ready
 from .schemas import Document
 
 ClusterInput = Union[dict[str, Any], str, Path, ClusterMap]
@@ -46,7 +49,9 @@ def create_app(
         if node_id is None:
             raise ValueError("node_id is required for data-node role")
         node = SearchNode(node_id=node_id, data_dir=data_dir or ".data/typesense_lite")
+        recovery_state = NodeRecoveryState(node_id)
         raft_client = make_cross_machine_client()
+        rebuild_tasks: list[asyncio.Task[None]] = []
 
         def make_apply_command(shard_id: int):
             return lambda command: node.apply_raft_command(shard_id, command)
@@ -73,6 +78,17 @@ def create_app(
         async def start_raft_runtimes() -> None:
             for runtime in raft_runtimes.values():
                 runtime.start()
+                if len(runtime.members) > 1:
+                    rebuild_tasks.append(
+                        asyncio.create_task(
+                            _auto_rebuild_shard(
+                                node=node,
+                                runtime=runtime,
+                                cluster=cluster,
+                                client=raft_client,
+                            )
+                        )
+                    )
             if coordinator_url:
                 advertise_host = os.environ.get(
                     "NODE_ADVERTISE_HOST", bind_host or "",
@@ -92,6 +108,9 @@ def create_app(
 
         @app.on_event("shutdown")
         async def close_raft_client() -> None:
+            for task in rebuild_tasks:
+                task.cancel()
+            await asyncio.gather(*rebuild_tasks, return_exceptions=True)
             for runtime in raft_runtimes.values():
                 await runtime.stop()
             registrar = getattr(app.state, "registrar", None)
@@ -101,7 +120,26 @@ def create_app(
 
         @app.get("/health")
         def node_health() -> dict[str, Any]:
-            return {"ok": True, "role": "node", "node_id": node_id}
+            recovery = _refresh_recovery_state(recovery_state, raft_runtimes)
+            return {
+                "ok": True,
+                "role": "node",
+                "node_id": node_id,
+                "status": recovery["status"],
+                "ready": recovery["ready"],
+                "error": recovery["error"],
+            }
+
+        @app.get("/internal/recovery/state")
+        def get_recovery_state() -> dict[str, Any]:
+            return _refresh_recovery_state(recovery_state, raft_runtimes)
+
+        def ensure_shard_ready(shard_id: int) -> None:
+            shard_state = _refresh_recovery_state(
+                recovery_state, raft_runtimes
+            )["shards"].get(str(shard_id))
+            if not shard_is_ready(shard_state):
+                raise HTTPException(status_code=503, detail="shard is not ready")
 
         @app.get("/internal/collections")
         def list_node_collections() -> dict[str, list[str]]:
@@ -120,6 +158,7 @@ def create_app(
 
         @app.get("/internal/shards/{shard_id}/collections/{collection}/documents")
         def list_node_documents(shard_id: int, collection: str) -> dict[str, Any]:
+            ensure_shard_ready(shard_id)
             return {"documents": node.list_documents(shard_id, collection)}
 
         @app.get(
@@ -131,6 +170,7 @@ def create_app(
             collection: str,
             document_id: str,
         ) -> Document:
+            ensure_shard_ready(shard_id)
             try:
                 return node.get_document(shard_id, collection, document_id)
             except KeyError as error:
@@ -169,6 +209,7 @@ def create_app(
 
         @app.get("/internal/shards/{shard_id}/collections/{collection}/document_ids")
         def list_node_document_ids(shard_id: int, collection: str) -> dict[str, list[str]]:
+            ensure_shard_ready(shard_id)
             return {"ids": node.list_document_ids(shard_id, collection)}
 
         @app.get("/internal/raft/{shard_id}/state")
@@ -176,6 +217,37 @@ def create_app(
             if shard_id not in raft_runtimes:
                 raise HTTPException(status_code=404, detail="raft shard not found")
             return raft_runtimes[shard_id].state()
+
+        @app.get("/internal/shards/{shard_id}/snapshot/manifest")
+        async def get_snapshot_manifest(shard_id: int) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            async with raft_runtimes[shard_id].rebuild_lock:
+                return _build_local_snapshot(node, raft_runtimes[shard_id])["manifest"]
+
+        @app.get("/internal/shards/{shard_id}/snapshot/export")
+        async def export_snapshot(shard_id: int) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            async with raft_runtimes[shard_id].rebuild_lock:
+                return _build_local_snapshot(node, raft_runtimes[shard_id])
+
+        @app.post("/internal/shards/{shard_id}/rebuild")
+        async def rebuild_shard(shard_id: int) -> dict[str, Any]:
+            if shard_id not in raft_runtimes:
+                raise HTTPException(status_code=404, detail="raft shard not found")
+            try:
+                return await _rebuild_shard_from_leader(
+                    node=node,
+                    runtime=raft_runtimes[shard_id],
+                    cluster=cluster,
+                    client=raft_client,
+                )
+            except (RuntimeError, ValueError, httpx.HTTPError) as error:
+                raft_runtimes[shard_id].set_recovery_override(
+                    "failed", error=str(error)
+                )
+                raise HTTPException(status_code=409, detail=str(error)) from error
 
         @app.post("/internal/raft/{shard_id}/request_vote")
         async def request_vote(shard_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -206,10 +278,51 @@ def create_app(
             shard_id: int,
             collection: str,
             q: str = Query(..., min_length=1),
-            limit: int = Query(10, ge=1, le=100),
+            query_by: Optional[str] = Query(None),
+            query_by_weights: Optional[str] = Query(None),
+            prefix: bool = Query(False),
+            num_typos: int = Query(0, ge=0, le=2),
+            filter_by: Optional[str] = Query(None),
+            sort_by: Optional[str] = Query(None),
+            facet_by: Optional[str] = Query(None),
+            page: int = Query(1, ge=1),
+            per_page: Optional[int] = Query(None, ge=1, le=100),
+            limit: Optional[int] = Query(None, ge=1, le=100),
+            highlight_fields: Optional[str] = Query(None),
+            all_results: bool = Query(False),
         ) -> dict[str, Any]:
-            hits = node.search(shard_id, collection, q, limit)
-            return {"found": len(hits), "hits": hits}
+            ensure_shard_ready(shard_id)
+            advanced_query = any(
+                value is not None
+                for value in (
+                    query_by,
+                    query_by_weights,
+                    filter_by,
+                    sort_by,
+                    facet_by,
+                    per_page,
+                    highlight_fields,
+                )
+            ) or prefix or num_typos > 0 or page != 1 or all_results
+            if not advanced_query:
+                hits = node.search(shard_id, collection, q, limit or 10)
+                return {"found": len(hits), "hits": hits}
+            effective_per_page = per_page if per_page is not None else limit
+            return node.search_query(
+                shard_id,
+                collection,
+                q,
+                query_by=query_by,
+                query_by_weights=query_by_weights,
+                prefix=prefix,
+                num_typos=num_typos,
+                filter_by=filter_by,
+                sort_by=sort_by,
+                facet_by=facet_by,
+                page=page,
+                per_page=effective_per_page,
+                highlight_fields=highlight_fields,
+            )
 
         return app
 
@@ -247,6 +360,20 @@ def create_app(
         @app.get("/cluster/raft")
         async def cluster_raft() -> dict[str, Any]:
             return await coordinator.raft_status()
+
+        @app.post("/cluster/shards/{shard_id}/members/{member_id}/rebuild")
+        async def rebuild_cluster_member(
+            shard_id: int, member_id: str
+        ) -> dict[str, Any]:
+            try:
+                return await coordinator.rebuild_shard_member(shard_id, member_id)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except httpx.HTTPStatusError as error:
+                detail = error.response.text or str(error)
+                raise HTTPException(
+                    status_code=error.response.status_code, detail=detail
+                ) from error
 
         @app.get("/cluster/nodes")
         def cluster_nodes() -> dict[str, Any]:
@@ -327,9 +454,33 @@ def create_app(
         async def search_documents(
             collection: str,
             q: str = Query(..., min_length=1),
+            query_by: Optional[str] = Query(None),
+            query_by_weights: Optional[str] = Query(None),
+            prefix: bool = Query(False),
+            num_typos: int = Query(0, ge=0, le=2),
+            filter_by: Optional[str] = Query(None),
+            sort_by: Optional[str] = Query(None),
+            facet_by: Optional[str] = Query(None),
+            page: int = Query(1, ge=1),
+            per_page: Optional[int] = Query(None, ge=1, le=100),
             limit: int = Query(10, ge=1, le=100),
+            highlight_fields: Optional[str] = Query(None),
         ) -> dict[str, Any]:
-            return await coordinator.search(collection, q, limit)
+            return await coordinator.search(
+                collection,
+                q,
+                limit=limit,
+                query_by=query_by,
+                query_by_weights=query_by_weights,
+                prefix=prefix,
+                num_typos=num_typos,
+                filter_by=filter_by,
+                sort_by=sort_by,
+                facet_by=facet_by,
+                page=page,
+                per_page=per_page,
+                highlight_fields=highlight_fields,
+            )
 
         @app.get("/collections/{collection}/documents/{document_id}")
         async def get_document(collection: str, document_id: str) -> Document:
@@ -384,6 +535,169 @@ def create_app(
         return app
 
     raise ValueError(f"unknown role {role!r}")
+
+
+def _refresh_recovery_state(
+    recovery_state: NodeRecoveryState,
+    raft_runtimes: dict[int, RaftRuntime],
+) -> dict[str, Any]:
+    for shard_id, runtime in raft_runtimes.items():
+        recovery_state.set_shard(shard_id, runtime.recovery_state())
+    return recovery_state.to_dict()
+
+
+def _build_local_snapshot(node: SearchNode, runtime: RaftRuntime) -> dict[str, Any]:
+    state = runtime.state()
+    if state["role"] != "leader":
+        raise HTTPException(status_code=409, detail="snapshot source is not leader")
+    if state["last_applied"] < state["commit_index"]:
+        raise HTTPException(status_code=409, detail="leader state machine is not applied")
+    return build_snapshot_payload(
+        shard_id=int(state["shard_id"]),
+        source_node_id=str(state["node"]),
+        source_role=str(state["role"]),
+        term=int(state["current_term"]),
+        snapshot_index=int(state["commit_index"]),
+        commit_index=int(state["commit_index"]),
+        collections=node.export_shard_collections(int(state["shard_id"])),
+        log_entries=runtime.committed_log_entries(),
+    )
+
+
+async def _auto_rebuild_shard(
+    *,
+    node: SearchNode,
+    runtime: RaftRuntime,
+    cluster: ClusterMap,
+    client: httpx.AsyncClient,
+) -> None:
+    for attempt in range(10):
+        await asyncio.sleep(min(0.2 * (attempt + 1), 1.0))
+        try:
+            if runtime.state()["role"] == "leader":
+                return
+            leader = await _discover_current_leader(runtime.shard_id, cluster, client)
+            if leader is None:
+                continue
+            integrity = node.check_replica_integrity(
+                runtime.shard_id, runtime.committed_commands()
+            )
+            manifest_response = await get_with_retry(
+                client,
+                f"{leader.url}/internal/shards/{runtime.shard_id}/snapshot/manifest",
+            )
+            manifest = manifest_response.json()
+            needs_snapshot = (
+                integrity.requires_rebuild
+                or (
+                    runtime.state()["last_log_index"] == 0
+                    and int(manifest.get("snapshot_index", 0)) > 0
+                )
+            )
+            if needs_snapshot:
+                await _rebuild_shard_from_leader(
+                    node=node,
+                    runtime=runtime,
+                    cluster=cluster,
+                    client=client,
+                )
+            return
+        except (RuntimeError, ValueError, httpx.HTTPError) as error:
+            if attempt == 9:
+                runtime.set_recovery_override("failed", error=str(error))
+
+
+async def _discover_current_leader(
+    shard_id: int, cluster: ClusterMap, client: httpx.AsyncClient
+) -> Any | None:
+    hinted_leader_id: str | None = None
+    for candidate in cluster.get_shard_voters(shard_id):
+        try:
+            response = await get_with_retry(
+                client, f"{candidate.url}/internal/raft/{shard_id}/state"
+            )
+        except httpx.HTTPError:
+            continue
+        payload = response.json()
+        if payload.get("role") == "leader":
+            return candidate
+        if isinstance(payload.get("leader_id"), str):
+            hinted_leader_id = payload["leader_id"]
+    if hinted_leader_id in cluster.nodes:
+        candidate = cluster.nodes[hinted_leader_id]
+        try:
+            response = await get_with_retry(
+                client, f"{candidate.url}/internal/raft/{shard_id}/state"
+            )
+        except httpx.HTTPError:
+            return None
+        if response.json().get("role") == "leader":
+            return candidate
+    return None
+
+
+async def _rebuild_shard_from_leader(
+    *,
+    node: SearchNode,
+    runtime: RaftRuntime,
+    cluster: ClusterMap,
+    client: httpx.AsyncClient,
+) -> dict[str, Any]:
+    async with runtime.rebuild_lock:
+        if runtime.state()["role"] == "leader":
+            raise RuntimeError("current leader cannot be rebuilt")
+        runtime.set_recovery_override("rebuilding", summary={"attempt": "snapshot"})
+        leader = await _discover_current_leader(runtime.shard_id, cluster, client)
+        if leader is None:
+            raise RuntimeError(f"no leader found for shard {runtime.shard_id}")
+
+        manifest_response = await get_with_retry(
+            client,
+            f"{leader.url}/internal/shards/{runtime.shard_id}/snapshot/manifest",
+        )
+        expected = manifest_response.json()
+        export_response = await get_with_retry(
+            client,
+            f"{leader.url}/internal/shards/{runtime.shard_id}/snapshot/export",
+        )
+        snapshot = validate_snapshot_payload(
+            export_response.json(),
+            expected_shard_id=runtime.shard_id,
+            expected_source_node_id=leader.id,
+            expected_term=int(expected["term"]),
+            expected_snapshot_index=int(expected["snapshot_index"]),
+            expected_commit_index=int(expected["commit_index"]),
+        )
+        manifest = snapshot["manifest"]
+        leader_state_response = await get_with_retry(
+            client, f"{leader.url}/internal/raft/{runtime.shard_id}/state"
+        )
+        leader_state = leader_state_response.json()
+        if leader_state.get("role") != "leader":
+            raise RuntimeError("snapshot source lost leadership")
+        if int(leader_state.get("current_term", -1)) != int(manifest["term"]):
+            raise RuntimeError("snapshot source term changed")
+        if int(manifest["snapshot_index"]) > int(leader_state.get("commit_index", -1)):
+            raise RuntimeError("snapshot index is ahead of current leader commit")
+
+        summary = {
+            "status": "completed",
+            "source_leader": leader.id,
+            "snapshot_index": manifest["snapshot_index"],
+            "checksum_verified": True,
+            "document_count": manifest["document_count"],
+        }
+        runtime.set_recovery_override("validating", summary=summary)
+        node.install_shard_snapshot(runtime.shard_id, snapshot["collections"])
+        runtime.install_snapshot_metadata(
+            snapshot_index=int(manifest["snapshot_index"]),
+            term=int(manifest["term"]),
+            log_entries=snapshot["log_entries"],
+            leader_id=leader.id,
+            summary=summary,
+        )
+        runtime.set_recovery_override("catching_up", summary=summary)
+        return summary
 
 
 def _load_cluster(cluster_config: ClusterInput) -> ClusterMap:

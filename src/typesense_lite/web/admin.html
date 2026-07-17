@@ -85,20 +85,15 @@
 
       main {
         display: grid;
-        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
         gap: 18px;
-        max-width: 1240px;
+        max-width: 960px;
         margin: 0 auto;
         padding: 20px 24px 32px;
       }
 
-      .stack {
-        display: grid;
-        align-content: start;
-        gap: 18px;
-      }
-
       .panel {
+        min-width: 0;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: var(--panel);
@@ -166,7 +161,6 @@
       }
 
       .form-grid,
-      .cluster-grid,
       .collection-list,
       .document-list {
         display: grid;
@@ -265,79 +259,6 @@
         color: var(--danger);
       }
 
-      .shard {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--panel-soft);
-        padding: 10px;
-      }
-
-      .shard-title {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        color: var(--text);
-        font-size: 13px;
-        font-weight: 750;
-      }
-
-      .status-badge {
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: 750;
-        padding: 2px 8px;
-        text-transform: uppercase;
-      }
-
-      .status-healthy {
-        background: #dcfce7;
-        color: #166534;
-      }
-
-      .status-degraded {
-        background: #fef3c7;
-        color: #92400e;
-      }
-
-      .status-unavailable {
-        background: #fee2e2;
-        color: #991b1b;
-      }
-
-      .health-node {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 10px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        background: var(--panel-soft);
-        font-size: 13px;
-      }
-
-      .health-node-ok {
-        border-left: 3px solid #22c55e;
-      }
-
-      .health-node-fail {
-        border-left: 3px solid #ef4444;
-      }
-
-      .health-node-name {
-        font-weight: 650;
-      }
-
-      .health-node-url {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .health-node-error {
-        color: #ef4444;
-        font-size: 12px;
-        margin-top: 2px;
-      }
-
       .meta {
         margin-top: 6px;
         color: var(--muted);
@@ -382,9 +303,6 @@
           flex-direction: column;
         }
 
-        main {
-          grid-template-columns: 1fr;
-        }
       }
 
       @media (max-width: 560px) {
@@ -399,7 +317,7 @@
       <div class="header-inner">
         <div>
           <h1>Typesense Lite Admin</h1>
-          <p class="subtitle">Manage collections, documents, and the local cluster.</p>
+          <p class="subtitle">Manage collections and documents.</p>
         </div>
         <nav>
           <a href="/search">Search</a>
@@ -409,54 +327,20 @@
     </header>
 
     <main>
-      <div class="stack">
-        <section class="panel">
-          <div class="section-head">
-            <h2>Cluster</h2>
-            <button class="secondary" id="refresh-cluster" type="button">Refresh</button>
-          </div>
-          <div id="cluster" class="cluster-grid"></div>
-        </section>
+      <section class="panel">
+        <div class="section-head">
+          <h2>Collections</h2>
+          <button class="secondary" id="refresh-collections" type="button">Refresh</button>
+        </div>
+        <div class="toolbar">
+          <input id="collection-input" value="books" autocomplete="off" />
+          <button id="load-documents" type="button">Load</button>
+        </div>
+        <div id="collections" class="collection-list"></div>
+        <div id="collection-message" class="message" hidden></div>
+      </section>
 
-        <section class="panel">
-          <div class="section-head">
-            <h2>Cluster Health</h2>
-            <button class="secondary" id="refresh-health" type="button">Refresh</button>
-          </div>
-          <div id="health-nodes"></div>
-          <div id="health-shards"></div>
-          <div id="health-message" class="message" hidden></div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>Collections</h2>
-            <button class="secondary" id="refresh-collections" type="button">Refresh</button>
-          </div>
-          <div class="toolbar">
-            <input id="collection-input" value="books" autocomplete="off" />
-            <button id="load-documents" type="button">Load</button>
-          </div>
-          <div id="collections" class="collection-list"></div>
-          <div id="collection-message" class="message" hidden></div>
-        </section>
-
-        <section class="panel">
-          <div class="section-head">
-            <h2>Consistency & Repair</h2>
-          </div>
-          <div class="actions">
-            <button id="check-consistency" type="button">Check Consistency</button>
-            <button class="secondary" id="repair-collection" type="button">Repair</button>
-          </div>
-          <div id="consistency-message" class="message" hidden></div>
-          <div id="consistency-results"></div>
-          <div id="repair-results"></div>
-        </section>
-      </div>
-
-      <div class="stack">
-        <section class="panel">
+      <section class="panel">
           <div class="section-head">
             <h2>Add Document</h2>
           </div>
@@ -485,9 +369,9 @@
           </form>
           <div id="write-message" class="message" hidden></div>
           <pre id="write-output" hidden></pre>
-        </section>
+      </section>
 
-        <section class="panel">
+      <section class="panel">
           <div class="section-head">
             <h2>Import Documents</h2>
           </div>
@@ -515,18 +399,18 @@
           </form>
           <div id="import-message" class="message" hidden></div>
           <div id="import-results" hidden></div>
-        </section>
+      </section>
 
-        <section class="panel">
+      <section class="panel">
           <div class="section-head">
             <h2>Documents</h2>
             <button class="secondary" id="refresh-documents" type="button">Refresh</button>
           </div>
           <div id="documents" class="document-list"></div>
           <div id="document-message" class="message" hidden></div>
-        </section>
+      </section>
 
-        <section class="panel">
+      <section class="panel">
           <div class="section-head">
             <h2>Document Detail</h2>
             <span id="selected-document" class="pill">none</span>
@@ -537,12 +421,23 @@
             <button class="danger" id="delete-document" type="button" disabled>Delete</button>
           </div>
           <div id="detail-message" class="message" hidden></div>
-        </section>
-      </div>
+      </section>
+
+      <footer class="panel admin-footer">
+        <div class="section-head">
+          <h2>Consistency & Repair</h2>
+        </div>
+        <div class="actions">
+          <button id="check-consistency" type="button">Check Consistency</button>
+          <button class="secondary" id="repair-collection" type="button">Repair</button>
+        </div>
+        <div id="consistency-message" class="message" hidden></div>
+        <div id="consistency-results"></div>
+        <div id="repair-results"></div>
+      </footer>
     </main>
 
     <script>
-      const clusterEl = document.querySelector("#cluster");
       const collectionsEl = document.querySelector("#collections");
       const collectionInputEl = document.querySelector("#collection-input");
       const collectionMessageEl = document.querySelector("#collection-message");
@@ -560,9 +455,6 @@
       const uploadFileEl = document.querySelector("#upload-file");
       const importMessageEl = document.querySelector("#import-message");
       const importResultsEl = document.querySelector("#import-results");
-      const healthNodesEl = document.querySelector("#health-nodes");
-      const healthShardsEl = document.querySelector("#health-shards");
-      const healthMessageEl = document.querySelector("#health-message");
       const consistencyMessageEl = document.querySelector("#consistency-message");
       const consistencyResultsEl = document.querySelector("#consistency-results");
       const repairResultsEl = document.querySelector("#repair-results");
@@ -570,8 +462,6 @@
       let currentCollection = "books";
       let selectedDocumentId = "";
 
-      document.querySelector("#refresh-cluster").addEventListener("click", loadCluster);
-      document.querySelector("#refresh-health").addEventListener("click", loadHealth);
       document.querySelector("#refresh-collections").addEventListener("click", loadCollections);
       document.querySelector("#load-documents").addEventListener("click", () => {
         selectCollection(clean(collectionInputEl.value));
@@ -585,21 +475,8 @@
       updateDocumentEl.addEventListener("click", updateSelectedDocument);
       deleteDocumentEl.addEventListener("click", deleteSelectedDocument);
 
-      loadCluster();
-      loadHealth();
       loadCollections();
       loadDocuments();
-
-      async function loadCluster() {
-        try {
-          const response = await fetch('/cluster');
-          const cluster = await readJson(response);
-          renderCluster(cluster);
-        } catch (error) {
-          clusterEl.innerHTML = "";
-          showMessage(clusterEl, error.message, true);
-        }
-      }
 
       async function loadCollections() {
         hideMessage(collectionMessageEl);
@@ -881,96 +758,6 @@
           await checkConsistency();
         } catch (error) {
           showMessage(consistencyMessageEl, error.message, true);
-        }
-      }
-
-      function renderCluster(cluster) {
-        const nodes = new Map(cluster.nodes.map((node) => [node.id, node]));
-        clusterEl.innerHTML = "";
-
-        Object.entries(cluster.shards).forEach(([shardId, placement]) => {
-          const primary = nodes.get(placement.primary);
-          const replicas = placement.replicas.join(", ") || "none";
-          const shard = document.createElement("div");
-          shard.className = "shard";
-          shard.innerHTML = `
-            <div class="shard-title">
-              <span>Shard ${escapeHtml(shardId)}</span>
-              <span>${escapeHtml(placement.primary)}</span>
-            </div>
-            <div class="meta">
-              Primary: ${escapeHtml(primary ? `${primary.host}:${primary.port}` : placement.primary)}<br />
-              Replicas: ${escapeHtml(replicas)}
-            </div>
-          `;
-          clusterEl.appendChild(shard);
-        });
-      }
-
-      async function loadHealth() {
-        hideMessage(healthMessageEl);
-        try {
-          const response = await fetch('/cluster/health');
-          const health = await readJson(response);
-          renderHealth(health);
-        } catch (error) {
-          healthNodesEl.innerHTML = "";
-          healthShardsEl.innerHTML = "";
-          showMessage(healthMessageEl, error.message, true);
-        }
-      }
-
-      function renderHealth(health) {
-        // Render nodes
-        const nodeEntries = Object.entries(health.nodes || {});
-        if (nodeEntries.length === 0) {
-          healthNodesEl.innerHTML = '<div class="message">No nodes configured.</div>';
-        } else {
-          healthNodesEl.innerHTML = nodeEntries.map(([nodeId, status]) => {
-            const isOk = status.ok === true;
-            const statusClass = isOk ? "health-node-ok" : "health-node-fail";
-            const errorHtml = status.error
-              ? `<div class="health-node-error">${escapeHtml(status.error)}</div>`
-              : "";
-            return `
-              <div class="health-node ${statusClass}">
-                <div>
-                  <div class="health-node-name">${escapeHtml(nodeId)}</div>
-                  <div class="health-node-url">${escapeHtml(status.url || "")}</div>
-                  ${errorHtml}
-                </div>
-                <span class="status-badge ${isOk ? "status-healthy" : "status-unavailable"}">
-                  ${isOk ? "ok" : "fail"}
-                </span>
-              </div>
-            `;
-          }).join("");
-        }
-
-        // Render shards
-        const shardEntries = Object.entries(health.shards || {});
-        if (shardEntries.length === 0) {
-          healthShardsEl.innerHTML = '<div class="message">No shards configured.</div>';
-        } else {
-          healthShardsEl.innerHTML = shardEntries.map(([shardId, status]) => {
-            const isHealthy = status.status === "healthy";
-            const isUnavailable = status.status === "unavailable";
-            const statusClass = isHealthy
-              ? "status-healthy"
-              : isUnavailable
-                ? "status-unavailable"
-                : "status-degraded";
-            return `
-              <div class="shard" style="margin-top: 8px;">
-                <div class="shard-title">
-                  <span>Shard ${escapeHtml(shardId)}</span>
-                  <span class="status-badge ${statusClass}">
-                    ${escapeHtml(status.status || "unknown")}
-                  </span>
-                </div>
-              </div>
-            `;
-          }).join("");
         }
       }
 

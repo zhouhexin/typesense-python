@@ -71,3 +71,90 @@ def test_index_deletes_document_and_terms() -> None:
     assert [hit["id"] for hit in index.search("old", limit=10)] == ["doc-2"]
     with pytest.raises(KeyError):
         index.get_document("doc-1")
+
+
+def test_search_query_supports_weights_filter_facet_highlight_and_pagination() -> None:
+    index = InvertedIndex()
+    index.add_document(
+        {
+            "id": "doc-1",
+            "title": "Distributed search",
+            "body": "Search engines split documents across shards",
+            "category": "tech",
+            "popularity": 20,
+        }
+    )
+    index.add_document(
+        {
+            "id": "doc-2",
+            "title": "Search basics",
+            "body": "Distributed systems search",
+            "category": "tech",
+            "popularity": 5,
+        }
+    )
+    index.add_document(
+        {
+            "id": "doc-3",
+            "title": "Cooking tips",
+            "body": "Distributed recipes",
+            "category": "food",
+            "popularity": 1,
+        }
+    )
+
+    result = index.search_query(
+        "distributed search",
+        query_by="title,body",
+        query_by_weights="3,1",
+        filter_by="category:tech",
+        facet_by="category",
+        highlight_fields="title,body",
+        page=1,
+        per_page=1,
+    )
+
+    assert result["found"] == 2
+    assert [hit["id"] for hit in result["hits"]] == ["doc-1"]
+    assert "<mark>Distributed</mark>" in result["hits"][0]["highlight"]
+    assert result["facet_counts"] == [
+        {
+            "field_name": "category",
+            "counts": [{"value": "tech", "count": 2}],
+        }
+    ]
+
+    second_page = index.search_query(
+        "distributed search",
+        query_by="title,body",
+        query_by_weights="3,1",
+        filter_by="category:tech",
+        page=2,
+        per_page=1,
+    )
+    assert [hit["id"] for hit in second_page["hits"]] == ["doc-2"]
+
+
+def test_search_query_supports_prefix_fuzzy_sort_and_chinese() -> None:
+    index = InvertedIndex()
+    index.add_document(
+        {"id": "doc-1", "title": "Distributed search", "popularity": 10}
+    )
+    index.add_document(
+        {"id": "doc-2", "title": "Search systems", "popularity": 20}
+    )
+    index.add_document({"id": "doc-cn", "title": "中文分布式搜索引擎"})
+
+    prefix_result = index.search_query("dist", query_by="title", prefix=True)
+    fuzzy_result = index.search_query(
+        "distributd", query_by="title", num_typos=1
+    )
+    sorted_result = index.search_query(
+        "search", query_by="title", sort_by="popularity:desc"
+    )
+    chinese_result = index.search_query("分布式搜索", query_by="title")
+
+    assert [hit["id"] for hit in prefix_result["hits"]] == ["doc-1"]
+    assert [hit["id"] for hit in fuzzy_result["hits"]] == ["doc-1"]
+    assert [hit["id"] for hit in sorted_result["hits"]] == ["doc-2", "doc-1"]
+    assert [hit["id"] for hit in chinese_result["hits"]] == ["doc-cn"]

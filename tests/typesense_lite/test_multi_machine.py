@@ -317,7 +317,7 @@ def test_health_uses_external_ip_not_loopback(
 ) -> None:
     """Sanity check: traffic flows via the configured alias IP, not 127.0.0.1."""
     coord = multi_ip_cluster["coordinator"]
-    response = httpx.get(f"http://127.0.0.1:{coord['port']}/health", timeout=2.0)
+    httpx.get(f"http://127.0.0.1:{coord['port']}/health", timeout=2.0)
     # The coordinator binds to 0.0.0.0, so loopback works; what we want is the
     # /cluster endpoint reporting the alias IP, confirming the cluster config
     # was actually loaded with external IPs.

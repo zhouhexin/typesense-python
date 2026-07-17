@@ -126,5 +126,7 @@ def _with_generated_id(document: Document, generated_id: str) -> Document:
 
 
 def _slugify(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    # Python's Unicode-aware ``\w`` preserves CJK filenames instead of
+    # collapsing every Chinese DOCX/PDF upload to the same extension-only ID.
+    slug = re.sub(r"[\W_]+", "-", value.casefold()).strip("-")
     return slug or "document"
